@@ -1,18 +1,22 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"net/http"
+
+	"github.com/labstack/echo/v4"
+
+	"go-avatar-service/internal/api"
 )
 
 func main() {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "Avatar Service is running!")
-	})
+	e := echo.New()
+
+	server := api.NewAvatarServer()
+	strictHandler := api.NewStrictHandler(server, nil)
+	api.RegisterHandlers(e, strictHandler)
 
 	log.Println("Starting server on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	if err := e.Start(":8080"); err != nil {
 		log.Fatal(err)
 	}
 }

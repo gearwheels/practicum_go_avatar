@@ -6,14 +6,21 @@ package api
 import (
 	"bytes"
 	"compress/flate"
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
 	"net/url"
 	"path"
 	"strings"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/labstack/echo/v4"
+	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
@@ -386,6 +393,371 @@ type UploadAvatarMultipartRequestBody UploadAvatarMultipartBody
 // PostUploadFormMultipartRequestBody defines body for PostUploadForm for multipart/form-data ContentType.
 type PostUploadFormMultipartRequestBody PostUploadFormMultipartBody
 
+// ServerInterface represents all server handlers.
+type ServerInterface interface {
+	// UploadAvatar Загрузка аватарки
+	// (POST /api/v1/avatars)
+	UploadAvatar(ctx echo.Context, params UploadAvatarParams) error
+	// DeleteAvatarById Удаление аватарки
+	// (DELETE /api/v1/avatars/{avatar_id})
+	DeleteAvatarById(ctx echo.Context, avatarId AvatarIdPath, params DeleteAvatarByIdParams) error
+	// GetAvatarById Получение аватарки (бинарные данные изображения)
+	// (GET /api/v1/avatars/{avatar_id})
+	GetAvatarById(ctx echo.Context, avatarId AvatarIdPath, params GetAvatarByIdParams) error
+	// GetAvatarMetadata Получение метаданных аватарки
+	// (GET /api/v1/avatars/{avatar_id}/metadata)
+	GetAvatarMetadata(ctx echo.Context, avatarId AvatarIdPath) error
+	// DeleteUserAvatar Удаление текущей аватарки пользователя
+	// (DELETE /api/v1/users/{user_id}/avatar)
+	DeleteUserAvatar(ctx echo.Context, userId UserIdPath, params DeleteUserAvatarParams) error
+	// GetUserAvatar Получение текущей аватарки пользователя
+	// (GET /api/v1/users/{user_id}/avatar)
+	GetUserAvatar(ctx echo.Context, userId UserIdPath, params GetUserAvatarParams) error
+	// ListUserAvatars Список аватарок пользователя
+	// (GET /api/v1/users/{user_id}/avatars)
+	ListUserAvatars(ctx echo.Context, userId UserIdPath, params ListUserAvatarsParams) error
+	// HealthCheck Проверка работоспособности сервиса
+	// (GET /health)
+	HealthCheck(ctx echo.Context) error
+	// GetGalleryPage Галерея аватарок пользователя
+	// (GET /web/gallery/{user_id})
+	GetGalleryPage(ctx echo.Context, userId UserIdPath) error
+	// GetUploadPage Страница с формой загрузки аватарки
+	// (GET /web/upload)
+	GetUploadPage(ctx echo.Context) error
+	// PostUploadForm Обработка загрузки через веб-форму
+	// (POST /web/upload)
+	PostUploadForm(ctx echo.Context) error
+}
+
+// ServerInterfaceWrapper converts echo contexts to parameters.
+type ServerInterfaceWrapper struct {
+	Handler ServerInterface
+}
+
+// UploadAvatar converts echo context to params.
+func (w *ServerInterfaceWrapper) UploadAvatar(ctx echo.Context) error {
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UploadAvatarParams
+
+	headers := ctx.Request().Header
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID UserIdHeader
+		n := len(valueList)
+		if n != 1 {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Expected one value for X-User-ID, got %d", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter X-User-ID: %s", err))
+		}
+
+		params.XUserID = XUserID
+	} else {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Header parameter X-User-ID is required, but not found"))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.UploadAvatar(ctx, params)
+	return err
+}
+
+// DeleteAvatarById converts echo context to params.
+func (w *ServerInterfaceWrapper) DeleteAvatarById(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "avatar_id" -------------
+	var avatarId AvatarIdPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "avatar_id", ctx.Param("avatar_id"), &avatarId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: ctx.Request().URL.RawPath == ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter avatar_id: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteAvatarByIdParams
+
+	headers := ctx.Request().Header
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID UserIdHeader
+		n := len(valueList)
+		if n != 1 {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Expected one value for X-User-ID, got %d", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter X-User-ID: %s", err))
+		}
+
+		params.XUserID = XUserID
+	} else {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Header parameter X-User-ID is required, but not found"))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.DeleteAvatarById(ctx, avatarId, params)
+	return err
+}
+
+// GetAvatarById converts echo context to params.
+func (w *ServerInterfaceWrapper) GetAvatarById(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "avatar_id" -------------
+	var avatarId AvatarIdPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "avatar_id", ctx.Param("avatar_id"), &avatarId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: ctx.Request().URL.RawPath == ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter avatar_id: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetAvatarByIdParams
+	// ------------- Optional query parameter "size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "size", ctx.QueryParams(), &params.Size, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter size: %s", err))
+	}
+
+	// ------------- Optional query parameter "format" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "format", ctx.QueryParams(), &params.Format, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter format: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetAvatarById(ctx, avatarId, params)
+	return err
+}
+
+// GetAvatarMetadata converts echo context to params.
+func (w *ServerInterfaceWrapper) GetAvatarMetadata(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "avatar_id" -------------
+	var avatarId AvatarIdPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "avatar_id", ctx.Param("avatar_id"), &avatarId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: ctx.Request().URL.RawPath == ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter avatar_id: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetAvatarMetadata(ctx, avatarId)
+	return err
+}
+
+// DeleteUserAvatar converts echo context to params.
+func (w *ServerInterfaceWrapper) DeleteUserAvatar(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "user_id" -------------
+	var userId UserIdPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "user_id", ctx.Param("user_id"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: ctx.Request().URL.RawPath == ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter user_id: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteUserAvatarParams
+
+	headers := ctx.Request().Header
+	// ------------- Required header parameter "X-User-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-User-ID")]; found {
+		var XUserID UserIdHeader
+		n := len(valueList)
+		if n != 1 {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Expected one value for X-User-ID, got %d", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-User-ID", valueList[0], &XUserID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter X-User-ID: %s", err))
+		}
+
+		params.XUserID = XUserID
+	} else {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Header parameter X-User-ID is required, but not found"))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.DeleteUserAvatar(ctx, userId, params)
+	return err
+}
+
+// GetUserAvatar converts echo context to params.
+func (w *ServerInterfaceWrapper) GetUserAvatar(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "user_id" -------------
+	var userId UserIdPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "user_id", ctx.Param("user_id"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: ctx.Request().URL.RawPath == ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter user_id: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetUserAvatarParams
+	// ------------- Optional query parameter "size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "size", ctx.QueryParams(), &params.Size, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter size: %s", err))
+	}
+
+	// ------------- Optional query parameter "format" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "format", ctx.QueryParams(), &params.Format, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter format: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetUserAvatar(ctx, userId, params)
+	return err
+}
+
+// ListUserAvatars converts echo context to params.
+func (w *ServerInterfaceWrapper) ListUserAvatars(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "user_id" -------------
+	var userId UserIdPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "user_id", ctx.Param("user_id"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: ctx.Request().URL.RawPath == ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter user_id: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListUserAvatarsParams
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", ctx.QueryParams(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter limit: %s", err))
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", ctx.QueryParams(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter offset: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ListUserAvatars(ctx, userId, params)
+	return err
+}
+
+// HealthCheck converts echo context to params.
+func (w *ServerInterfaceWrapper) HealthCheck(ctx echo.Context) error {
+	var err error
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.HealthCheck(ctx)
+	return err
+}
+
+// GetGalleryPage converts echo context to params.
+func (w *ServerInterfaceWrapper) GetGalleryPage(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "user_id" -------------
+	var userId UserIdPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "user_id", ctx.Param("user_id"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: ctx.Request().URL.RawPath == ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter user_id: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetGalleryPage(ctx, userId)
+	return err
+}
+
+// GetUploadPage converts echo context to params.
+func (w *ServerInterfaceWrapper) GetUploadPage(ctx echo.Context) error {
+	var err error
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetUploadPage(ctx)
+	return err
+}
+
+// PostUploadForm converts echo context to params.
+func (w *ServerInterfaceWrapper) PostUploadForm(ctx echo.Context) error {
+	var err error
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.PostUploadForm(ctx)
+	return err
+}
+
+// This is a simple interface which specifies echo.Route addition functions which
+// are present on both echo.Echo and echo.Group, since we want to allow using
+// either of them for path registration
+type EchoRouter interface {
+	CONNECT(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+	DELETE(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+	GET(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+	HEAD(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+	OPTIONS(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+	PATCH(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+	POST(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+	PUT(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+	TRACE(path string, h echo.HandlerFunc, m ...echo.MiddlewareFunc) *echo.Route
+}
+
+// RegisterHandlersOptions configures RegisterHandlersWithOptions.
+type RegisterHandlersOptions struct {
+	// BaseURL is prepended to every registered path so the API can be served
+	// under a prefix.
+	BaseURL string
+	// OperationMiddlewares lets the caller attach per-operation middleware at
+	// registration time. The map key is the OpenAPI `operationId` value as it
+	// appears in the spec (the raw, un-normalized form). Operations that have
+	// no entry are registered with no extra middleware. A nil map disables
+	// per-operation middleware entirely.
+	OperationMiddlewares map[string][]echo.MiddlewareFunc
+}
+
+// RegisterHandlers adds each server route to the EchoRouter.
+func RegisterHandlers(router EchoRouter, si ServerInterface) {
+	RegisterHandlersWithOptions(router, si, RegisterHandlersOptions{})
+}
+
+// RegisterHandlersWithBaseURL registers handlers and prepends BaseURL to the
+// paths so the API can be served under a prefix.
+func RegisterHandlersWithBaseURL(router EchoRouter, si ServerInterface, baseURL string) {
+	RegisterHandlersWithOptions(router, si, RegisterHandlersOptions{BaseURL: baseURL})
+}
+
+// RegisterHandlersWithOptions registers handlers using the supplied options,
+// including any per-operation middleware.
+func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options RegisterHandlersOptions) {
+
+	wrapper := ServerInterfaceWrapper{
+		Handler: si,
+	}
+
+	router.POST(options.BaseURL+"/api/v1/avatars", wrapper.UploadAvatar, options.OperationMiddlewares["uploadAvatar"]...)
+	router.DELETE(options.BaseURL+"/api/v1/avatars/:avatar_id", wrapper.DeleteAvatarById, options.OperationMiddlewares["deleteAvatarById"]...)
+	router.GET(options.BaseURL+"/api/v1/avatars/:avatar_id", wrapper.GetAvatarById, options.OperationMiddlewares["getAvatarById"]...)
+	router.GET(options.BaseURL+"/api/v1/avatars/:avatar_id/metadata", wrapper.GetAvatarMetadata, options.OperationMiddlewares["getAvatarMetadata"]...)
+	router.DELETE(options.BaseURL+"/api/v1/users/:user_id/avatar", wrapper.DeleteUserAvatar, options.OperationMiddlewares["deleteUserAvatar"]...)
+	router.GET(options.BaseURL+"/api/v1/users/:user_id/avatar", wrapper.GetUserAvatar, options.OperationMiddlewares["getUserAvatar"]...)
+	router.GET(options.BaseURL+"/api/v1/users/:user_id/avatars", wrapper.ListUserAvatars, options.OperationMiddlewares["listUserAvatars"]...)
+	router.GET(options.BaseURL+"/health", wrapper.HealthCheck, options.OperationMiddlewares["healthCheck"]...)
+	router.GET(options.BaseURL+"/web/upload", wrapper.GetUploadPage, options.OperationMiddlewares["getUploadPage"]...)
+	router.POST(options.BaseURL+"/web/upload", wrapper.PostUploadForm, options.OperationMiddlewares["postUploadForm"]...)
+	router.GET(options.BaseURL+"/web/gallery/:user_id", wrapper.GetGalleryPage, options.OperationMiddlewares["getGalleryPage"]...)
+
+}
+
 type BadRequestJSONResponse Error
 
 type InternalErrorJSONResponse Error
@@ -393,6 +765,1078 @@ type InternalErrorJSONResponse Error
 type NotFoundJSONResponse Error
 
 type UnauthorizedJSONResponse Error
+
+type UploadAvatarRequestObject struct {
+	Params UploadAvatarParams
+	Body   *multipart.Reader
+}
+
+type UploadAvatarResponseObject interface {
+	VisitUploadAvatarResponse(w http.ResponseWriter) error
+}
+
+type UploadAvatar201JSONResponse AvatarUploadResponse
+
+func (response UploadAvatar201JSONResponse) VisitUploadAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAvatar400JSONResponse Error
+
+func (response UploadAvatar400JSONResponse) VisitUploadAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAvatar401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UploadAvatar401JSONResponse) VisitUploadAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAvatar413JSONResponse FileTooLargeError
+
+func (response UploadAvatar413JSONResponse) VisitUploadAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAvatar500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UploadAvatar500JSONResponse) VisitUploadAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteAvatarByIdRequestObject struct {
+	AvatarId AvatarIdPath `json:"avatar_id"`
+	Params   DeleteAvatarByIdParams
+}
+
+type DeleteAvatarByIdResponseObject interface {
+	VisitDeleteAvatarByIdResponse(w http.ResponseWriter) error
+}
+
+type DeleteAvatarById204Response struct {
+}
+
+func (response DeleteAvatarById204Response) VisitDeleteAvatarByIdResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteAvatarById401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteAvatarById401JSONResponse) VisitDeleteAvatarByIdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteAvatarById403JSONResponse Error
+
+func (response DeleteAvatarById403JSONResponse) VisitDeleteAvatarByIdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteAvatarById404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteAvatarById404JSONResponse) VisitDeleteAvatarByIdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteAvatarById500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteAvatarById500JSONResponse) VisitDeleteAvatarByIdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAvatarByIdRequestObject struct {
+	AvatarId AvatarIdPath `json:"avatar_id"`
+	Params   GetAvatarByIdParams
+}
+
+type GetAvatarByIdResponseObject interface {
+	VisitGetAvatarByIdResponse(w http.ResponseWriter) error
+}
+
+type GetAvatarById200ResponseHeaders struct {
+	CacheControl *string
+	ETag         *string
+}
+
+type GetAvatarById200ImagejpegResponse struct {
+	Body          io.Reader
+	Headers       GetAvatarById200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetAvatarById200ImagejpegResponse) VisitGetAvatarByIdResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	if response.Headers.CacheControl != nil {
+		w.Header().Set("Cache-Control", fmt.Sprint(*response.Headers.CacheControl))
+	}
+	if response.Headers.ETag != nil {
+		w.Header().Set("ETag", fmt.Sprint(*response.Headers.ETag))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetAvatarById200ImagepngResponse struct {
+	Body          io.Reader
+	Headers       GetAvatarById200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetAvatarById200ImagepngResponse) VisitGetAvatarByIdResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/png")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	if response.Headers.CacheControl != nil {
+		w.Header().Set("Cache-Control", fmt.Sprint(*response.Headers.CacheControl))
+	}
+	if response.Headers.ETag != nil {
+		w.Header().Set("ETag", fmt.Sprint(*response.Headers.ETag))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetAvatarById200ImagewebpResponse struct {
+	Body          io.Reader
+	Headers       GetAvatarById200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetAvatarById200ImagewebpResponse) VisitGetAvatarByIdResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/webp")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	if response.Headers.CacheControl != nil {
+		w.Header().Set("Cache-Control", fmt.Sprint(*response.Headers.CacheControl))
+	}
+	if response.Headers.ETag != nil {
+		w.Header().Set("ETag", fmt.Sprint(*response.Headers.ETag))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetAvatarById404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetAvatarById404JSONResponse) VisitGetAvatarByIdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAvatarById500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetAvatarById500JSONResponse) VisitGetAvatarByIdResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAvatarMetadataRequestObject struct {
+	AvatarId AvatarIdPath `json:"avatar_id"`
+}
+
+type GetAvatarMetadataResponseObject interface {
+	VisitGetAvatarMetadataResponse(w http.ResponseWriter) error
+}
+
+type GetAvatarMetadata200JSONResponse AvatarMetadata
+
+func (response GetAvatarMetadata200JSONResponse) VisitGetAvatarMetadataResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAvatarMetadata404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetAvatarMetadata404JSONResponse) VisitGetAvatarMetadataResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAvatarMetadata500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetAvatarMetadata500JSONResponse) VisitGetAvatarMetadataResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteUserAvatarRequestObject struct {
+	UserId UserIdPath `json:"user_id"`
+	Params DeleteUserAvatarParams
+}
+
+type DeleteUserAvatarResponseObject interface {
+	VisitDeleteUserAvatarResponse(w http.ResponseWriter) error
+}
+
+type DeleteUserAvatar204Response struct {
+}
+
+func (response DeleteUserAvatar204Response) VisitDeleteUserAvatarResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteUserAvatar401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteUserAvatar401JSONResponse) VisitDeleteUserAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteUserAvatar403JSONResponse Error
+
+func (response DeleteUserAvatar403JSONResponse) VisitDeleteUserAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteUserAvatar404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteUserAvatar404JSONResponse) VisitDeleteUserAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteUserAvatar500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteUserAvatar500JSONResponse) VisitDeleteUserAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetUserAvatarRequestObject struct {
+	UserId UserIdPath `json:"user_id"`
+	Params GetUserAvatarParams
+}
+
+type GetUserAvatarResponseObject interface {
+	VisitGetUserAvatarResponse(w http.ResponseWriter) error
+}
+
+type GetUserAvatar200ResponseHeaders struct {
+	CacheControl *string
+	ETag         *string
+}
+
+type GetUserAvatar200ImagejpegResponse struct {
+	Body          io.Reader
+	Headers       GetUserAvatar200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetUserAvatar200ImagejpegResponse) VisitGetUserAvatarResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	if response.Headers.CacheControl != nil {
+		w.Header().Set("Cache-Control", fmt.Sprint(*response.Headers.CacheControl))
+	}
+	if response.Headers.ETag != nil {
+		w.Header().Set("ETag", fmt.Sprint(*response.Headers.ETag))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetUserAvatar200ImagepngResponse struct {
+	Body          io.Reader
+	Headers       GetUserAvatar200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetUserAvatar200ImagepngResponse) VisitGetUserAvatarResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/png")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	if response.Headers.CacheControl != nil {
+		w.Header().Set("Cache-Control", fmt.Sprint(*response.Headers.CacheControl))
+	}
+	if response.Headers.ETag != nil {
+		w.Header().Set("ETag", fmt.Sprint(*response.Headers.ETag))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetUserAvatar200ImagewebpResponse struct {
+	Body          io.Reader
+	Headers       GetUserAvatar200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetUserAvatar200ImagewebpResponse) VisitGetUserAvatarResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/webp")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	if response.Headers.CacheControl != nil {
+		w.Header().Set("Cache-Control", fmt.Sprint(*response.Headers.CacheControl))
+	}
+	if response.Headers.ETag != nil {
+		w.Header().Set("ETag", fmt.Sprint(*response.Headers.ETag))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetUserAvatar404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetUserAvatar404JSONResponse) VisitGetUserAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetUserAvatar500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetUserAvatar500JSONResponse) VisitGetUserAvatarResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListUserAvatarsRequestObject struct {
+	UserId UserIdPath `json:"user_id"`
+	Params ListUserAvatarsParams
+}
+
+type ListUserAvatarsResponseObject interface {
+	VisitListUserAvatarsResponse(w http.ResponseWriter) error
+}
+
+type ListUserAvatars200JSONResponse struct {
+	Items *[]AvatarMetadata `json:"items,omitempty"`
+
+	// Limit Example: 20
+	Limit *int `json:"limit,omitempty"`
+
+	// Offset Example: 0
+	Offset *int `json:"offset,omitempty"`
+
+	// Total Example: 3
+	Total *int `json:"total,omitempty"`
+}
+
+func (response ListUserAvatars200JSONResponse) VisitListUserAvatarsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListUserAvatars404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListUserAvatars404JSONResponse) VisitListUserAvatarsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListUserAvatars500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListUserAvatars500JSONResponse) VisitListUserAvatarsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HealthCheckRequestObject struct {
+}
+
+type HealthCheckResponseObject interface {
+	VisitHealthCheckResponse(w http.ResponseWriter) error
+}
+
+type HealthCheck200JSONResponse HealthStatus
+
+func (response HealthCheck200JSONResponse) VisitHealthCheckResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HealthCheck503JSONResponse HealthStatus
+
+func (response HealthCheck503JSONResponse) VisitHealthCheckResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetGalleryPageRequestObject struct {
+	UserId UserIdPath `json:"user_id"`
+}
+
+type GetGalleryPageResponseObject interface {
+	VisitGetGalleryPageResponse(w http.ResponseWriter) error
+}
+
+type GetGalleryPage200TexthtmlResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response GetGalleryPage200TexthtmlResponse) VisitGetGalleryPageResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/html")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetGalleryPage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetGalleryPage404JSONResponse) VisitGetGalleryPageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetUploadPageRequestObject struct {
+}
+
+type GetUploadPageResponseObject interface {
+	VisitGetUploadPageResponse(w http.ResponseWriter) error
+}
+
+type GetUploadPage200TexthtmlResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response GetUploadPage200TexthtmlResponse) VisitGetUploadPageResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/html")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type PostUploadFormRequestObject struct {
+	Body *multipart.Reader
+}
+
+type PostUploadFormResponseObject interface {
+	VisitPostUploadFormResponse(w http.ResponseWriter) error
+}
+
+type PostUploadForm200TexthtmlResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response PostUploadForm200TexthtmlResponse) VisitPostUploadFormResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/html")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type PostUploadForm302Response struct {
+}
+
+func (response PostUploadForm302Response) VisitPostUploadFormResponse(w http.ResponseWriter) error {
+	w.WriteHeader(302)
+	return nil
+}
+
+type PostUploadForm400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response PostUploadForm400JSONResponse) VisitPostUploadFormResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+// StrictServerInterface represents all server handlers.
+type StrictServerInterface interface {
+	// UploadAvatar Загрузка аватарки
+	// (POST /api/v1/avatars)
+	UploadAvatar(ctx context.Context, request UploadAvatarRequestObject) (UploadAvatarResponseObject, error)
+	// DeleteAvatarById Удаление аватарки
+	// (DELETE /api/v1/avatars/{avatar_id})
+	DeleteAvatarById(ctx context.Context, request DeleteAvatarByIdRequestObject) (DeleteAvatarByIdResponseObject, error)
+	// GetAvatarById Получение аватарки (бинарные данные изображения)
+	// (GET /api/v1/avatars/{avatar_id})
+	GetAvatarById(ctx context.Context, request GetAvatarByIdRequestObject) (GetAvatarByIdResponseObject, error)
+	// GetAvatarMetadata Получение метаданных аватарки
+	// (GET /api/v1/avatars/{avatar_id}/metadata)
+	GetAvatarMetadata(ctx context.Context, request GetAvatarMetadataRequestObject) (GetAvatarMetadataResponseObject, error)
+	// DeleteUserAvatar Удаление текущей аватарки пользователя
+	// (DELETE /api/v1/users/{user_id}/avatar)
+	DeleteUserAvatar(ctx context.Context, request DeleteUserAvatarRequestObject) (DeleteUserAvatarResponseObject, error)
+	// GetUserAvatar Получение текущей аватарки пользователя
+	// (GET /api/v1/users/{user_id}/avatar)
+	GetUserAvatar(ctx context.Context, request GetUserAvatarRequestObject) (GetUserAvatarResponseObject, error)
+	// ListUserAvatars Список аватарок пользователя
+	// (GET /api/v1/users/{user_id}/avatars)
+	ListUserAvatars(ctx context.Context, request ListUserAvatarsRequestObject) (ListUserAvatarsResponseObject, error)
+	// HealthCheck Проверка работоспособности сервиса
+	// (GET /health)
+	HealthCheck(ctx context.Context, request HealthCheckRequestObject) (HealthCheckResponseObject, error)
+	// GetGalleryPage Галерея аватарок пользователя
+	// (GET /web/gallery/{user_id})
+	GetGalleryPage(ctx context.Context, request GetGalleryPageRequestObject) (GetGalleryPageResponseObject, error)
+	// GetUploadPage Страница с формой загрузки аватарки
+	// (GET /web/upload)
+	GetUploadPage(ctx context.Context, request GetUploadPageRequestObject) (GetUploadPageResponseObject, error)
+	// PostUploadForm Обработка загрузки через веб-форму
+	// (POST /web/upload)
+	PostUploadForm(ctx context.Context, request PostUploadFormRequestObject) (PostUploadFormResponseObject, error)
+}
+
+type StrictHandlerFunc func(ctx echo.Context, request any) (any, error)
+type StrictMiddlewareFunc func(f StrictHandlerFunc, operationID string) StrictHandlerFunc
+
+func NewStrictHandler(ssi StrictServerInterface, middlewares []StrictMiddlewareFunc) ServerInterface {
+	return &strictHandler{ssi: ssi, middlewares: middlewares}
+}
+
+type strictHandler struct {
+	ssi         StrictServerInterface
+	middlewares []StrictMiddlewareFunc
+}
+
+// UploadAvatar operation middleware
+func (sh *strictHandler) UploadAvatar(ctx echo.Context, params UploadAvatarParams) error {
+	var request UploadAvatarRequestObject
+
+	request.Params = params
+
+	if reader, err := ctx.Request().MultipartReader(); err != nil {
+		return err
+	} else {
+		request.Body = reader
+	}
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.UploadAvatar(ctx.Request().Context(), request.(UploadAvatarRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UploadAvatar")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(UploadAvatarResponseObject); ok {
+		return validResponse.VisitUploadAvatarResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// DeleteAvatarById operation middleware
+func (sh *strictHandler) DeleteAvatarById(ctx echo.Context, avatarId AvatarIdPath, params DeleteAvatarByIdParams) error {
+	var request DeleteAvatarByIdRequestObject
+
+	request.AvatarId = avatarId
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteAvatarById(ctx.Request().Context(), request.(DeleteAvatarByIdRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteAvatarById")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(DeleteAvatarByIdResponseObject); ok {
+		return validResponse.VisitDeleteAvatarByIdResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetAvatarById operation middleware
+func (sh *strictHandler) GetAvatarById(ctx echo.Context, avatarId AvatarIdPath, params GetAvatarByIdParams) error {
+	var request GetAvatarByIdRequestObject
+
+	request.AvatarId = avatarId
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetAvatarById(ctx.Request().Context(), request.(GetAvatarByIdRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetAvatarById")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetAvatarByIdResponseObject); ok {
+		return validResponse.VisitGetAvatarByIdResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetAvatarMetadata operation middleware
+func (sh *strictHandler) GetAvatarMetadata(ctx echo.Context, avatarId AvatarIdPath) error {
+	var request GetAvatarMetadataRequestObject
+
+	request.AvatarId = avatarId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetAvatarMetadata(ctx.Request().Context(), request.(GetAvatarMetadataRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetAvatarMetadata")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetAvatarMetadataResponseObject); ok {
+		return validResponse.VisitGetAvatarMetadataResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// DeleteUserAvatar operation middleware
+func (sh *strictHandler) DeleteUserAvatar(ctx echo.Context, userId UserIdPath, params DeleteUserAvatarParams) error {
+	var request DeleteUserAvatarRequestObject
+
+	request.UserId = userId
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteUserAvatar(ctx.Request().Context(), request.(DeleteUserAvatarRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteUserAvatar")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(DeleteUserAvatarResponseObject); ok {
+		return validResponse.VisitDeleteUserAvatarResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetUserAvatar operation middleware
+func (sh *strictHandler) GetUserAvatar(ctx echo.Context, userId UserIdPath, params GetUserAvatarParams) error {
+	var request GetUserAvatarRequestObject
+
+	request.UserId = userId
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetUserAvatar(ctx.Request().Context(), request.(GetUserAvatarRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetUserAvatar")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetUserAvatarResponseObject); ok {
+		return validResponse.VisitGetUserAvatarResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// ListUserAvatars operation middleware
+func (sh *strictHandler) ListUserAvatars(ctx echo.Context, userId UserIdPath, params ListUserAvatarsParams) error {
+	var request ListUserAvatarsRequestObject
+
+	request.UserId = userId
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListUserAvatars(ctx.Request().Context(), request.(ListUserAvatarsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListUserAvatars")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ListUserAvatarsResponseObject); ok {
+		return validResponse.VisitListUserAvatarsResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// HealthCheck operation middleware
+func (sh *strictHandler) HealthCheck(ctx echo.Context) error {
+	var request HealthCheckRequestObject
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.HealthCheck(ctx.Request().Context(), request.(HealthCheckRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "HealthCheck")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(HealthCheckResponseObject); ok {
+		return validResponse.VisitHealthCheckResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetGalleryPage operation middleware
+func (sh *strictHandler) GetGalleryPage(ctx echo.Context, userId UserIdPath) error {
+	var request GetGalleryPageRequestObject
+
+	request.UserId = userId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetGalleryPage(ctx.Request().Context(), request.(GetGalleryPageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetGalleryPage")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetGalleryPageResponseObject); ok {
+		return validResponse.VisitGetGalleryPageResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetUploadPage operation middleware
+func (sh *strictHandler) GetUploadPage(ctx echo.Context) error {
+	var request GetUploadPageRequestObject
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetUploadPage(ctx.Request().Context(), request.(GetUploadPageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetUploadPage")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetUploadPageResponseObject); ok {
+		return validResponse.VisitGetUploadPageResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// PostUploadForm operation middleware
+func (sh *strictHandler) PostUploadForm(ctx echo.Context) error {
+	var request PostUploadFormRequestObject
+
+	if reader, err := ctx.Request().MultipartReader(); err != nil {
+		return err
+	} else {
+		request.Body = reader
+	}
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.PostUploadForm(ctx.Request().Context(), request.(PostUploadFormRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostUploadForm")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(PostUploadFormResponseObject); ok {
+		return validResponse.VisitPostUploadFormResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
 
 // Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
 // Stored as a slice of fixed-width chunks rather than one concatenated
