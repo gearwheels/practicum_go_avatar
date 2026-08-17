@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -14,6 +14,7 @@ WORKDIR /root/
 COPY --from=builder /app/server .
 COPY --from=builder /app/worker .
 COPY --from=builder /app/web ./web/
+COPY --from=builder /app/migrations ./migrations/
 
 # По умолчанию запускается HTTP-сервер; для воркера команда
 # переопределяется в docker-compose.yml (command: ["./worker"])

@@ -127,7 +127,7 @@
       hideResponse();
 
       const formData = new FormData();
-      formData.append('image', imageFile);
+      formData.append('file', imageFile);
 
       try {
         const response = await fetch('/api/v1/avatars', {
