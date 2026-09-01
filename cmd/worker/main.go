@@ -17,6 +17,7 @@ import (
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/retryutil"
 	"go-avatar-service/internal/storage"
 	"go-avatar-service/internal/worker"
 )
@@ -35,7 +36,7 @@ func main() {
 	}
 
 	var pool *pgxpool.Pool
-	err = retry(5, 2*time.Second, func() error {
+	err = retryutil.Do(ctx, 5, 2*time.Second, func() error {
 		var dialErr error
 		pool, dialErr = postgres.NewPool(ctx, cfg.DatabaseURL)
 		return dialErr
@@ -53,7 +54,7 @@ func main() {
 	}
 
 	var amqpConn *amqp.Connection
-	err = retry(5, 2*time.Second, func() error {
+	err = retryutil.Do(ctx, 5, 2*time.Second, func() error {
 		var dialErr error
 		amqpConn, dialErr = amqp.Dial(cfg.RabbitMQURL)
 		return dialErr
@@ -101,19 +102,4 @@ func main() {
 	<-ctx.Done()
 	logger.Info("получен сигнал остановки, завершаем работу")
 	wg.Wait()
-}
-
-// retry повторяет fn до attempts раз с фиксированной паузой delay между
-// попытками — см. пояснение в cmd/server/main.go.
-func retry(attempts int, delay time.Duration, fn func() error) error {
-	var err error
-	for i := 0; i < attempts; i++ {
-		if err = fn(); err == nil {
-			return nil
-		}
-		if i < attempts-1 {
-			time.Sleep(delay)
-		}
-	}
-	return err
 }

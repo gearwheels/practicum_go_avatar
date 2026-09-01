@@ -19,6 +19,7 @@ import (
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/retryutil"
 	"go-avatar-service/internal/services/avatar"
 	"go-avatar-service/internal/storage"
 	"go-avatar-service/internal/webui"
@@ -38,7 +39,7 @@ func main() {
 	}
 
 	var pool *pgxpool.Pool
-	err = retry(5, 2*time.Second, func() error {
+	err = retryutil.Do(ctx, 5, 2*time.Second, func() error {
 		var dialErr error
 		pool, dialErr = postgres.NewPool(ctx, cfg.DatabaseURL)
 		return dialErr
@@ -61,7 +62,7 @@ func main() {
 	}
 
 	var amqpConn *amqp.Connection
-	err = retry(5, 2*time.Second, func() error {
+	err = retryutil.Do(ctx, 5, 2*time.Second, func() error {
 		var dialErr error
 		amqpConn, dialErr = amqp.Dial(cfg.RabbitMQURL)
 		return dialErr
@@ -119,22 +120,4 @@ func main() {
 	if err := e.Shutdown(shutdownCtx); err != nil {
 		logger.Error("ошибка при остановке сервера", "error", err)
 	}
-}
-
-// retry повторяет fn до attempts раз с фиксированной паузой delay между
-// попытками. Нужен на старте: соседние контейнеры (Postgres/RabbitMQ) в
-// docker-compose могут пройти healthcheck чуть раньше, чем реально готовы
-// принимать соединения, — без этого сервис падает с первой неудачной
-// попытки и полагается на перезапуск самим Docker.
-func retry(attempts int, delay time.Duration, fn func() error) error {
-	var err error
-	for i := 0; i < attempts; i++ {
-		if err = fn(); err == nil {
-			return nil
-		}
-		if i < attempts-1 {
-			time.Sleep(delay)
-		}
-	}
-	return err
 }

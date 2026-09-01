@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -47,7 +48,7 @@ func (h *Handler) HandleProcess(ctx context.Context, body []byte) error {
 
 	a, err := h.repo.GetByID(ctx, ev.AvatarID)
 	if err != nil {
-		if err == repository.ErrNotFound {
+		if errors.Is(err, repository.ErrNotFound) {
 			// Аватарка удалена до того, как дошла очередь до обработки —
 			// не ошибка, просто нечего делать.
 			slog.Info("аватарка не найдена, пропускаем обработку", "avatar_id", ev.AvatarID)
