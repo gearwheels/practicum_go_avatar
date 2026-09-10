@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>GophProfile — загрузка аватарки</title>
+  <style>
+    body { font-family: sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; }
+    label { display: block; margin-top: 12px; font-weight: bold; }
+    input { display: block; margin-top: 4px; width: 100%; box-sizing: border-box; }
+    button { margin-top: 16px; padding: 8px 16px; }
+  </style>
+</head>
+<body>
+  <h1>Загрузка аватарки</h1>
+  <form method="post" action="/web/upload" enctype="multipart/form-data">
+    <label for="user_id">User ID</label>
+    <input type="text" id="user_id" name="user_id" required>
+
+    <label for="file">Файл (JPEG, PNG, WebP, до 10MB)</label>
+    <input type="file" id="file" name="file" accept="image/*" required>
+
+    <button type="submit">Загрузить</button>
+  </form>
+</body>
+</html>
