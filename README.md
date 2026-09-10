@@ -36,7 +36,10 @@
 
 ## Техническое задание
 
-Подробное техническое задание находится в файле [docs/technical-specification.md](docs/technical-specification.md).
+Подробное техническое задание находится в файлах
+[docs/technical-specification.md](docs/technical-specification.md) (спринт 1 — MVP) и
+[docs/technical-specification-sprint2.md](docs/technical-specification-sprint2.md)
+(спринт 2 — наблюдаемость).
 
 ## Как начать работу
 
@@ -63,6 +66,38 @@
     ```
 
 После этого сервис будет доступен по адресу `http://localhost:8080`.
+
+## Наблюдаемость
+
+После `docker-compose up` вместе с сервисом поднимается стек наблюдаемости:
+
+| Инструмент | Адрес | Для чего |
+|---|---|---|
+| Grafana | http://localhost:3000 | Дашборд «GophProfile — Avatar Service», просмотр логов (Explore → Loki) |
+| Prometheus | http://localhost:9090 | Метрики и статус сбора (`/targets`) |
+| Jaeger | http://localhost:16686 | Распределённые трейсы |
+| Метрики сервера | http://localhost:8080/metrics | Сырые метрики HTTP-сервера |
+| Метрики воркера | http://localhost:9091/metrics | Сырые метрики фонового обработчика |
+
+Grafana открывается без логина (анонимный доступ с правами Viewer); для
+изменения дашбордов — `admin` / `admin`.
+
+**Что где смотреть:**
+
+- **Трейсинг.** Каждый запрос порождает трейс со вложенными спанами: HTTP →
+  бизнес-логика → SQL-запросы → операции с S3 → публикация в RabbitMQ. Трейс
+  не обрывается на брокере: `traceparent` передаётся в заголовках сообщения,
+  поэтому обработка в воркере видна тем же трейсом (`avatar-worker`).
+- **Метрики.** Технические (RED: частота запросов, ошибки, длительность),
+  инфраструктурные (соединения с БД, глубина очередей) и бизнесовые
+  (`avatars_uploads_total`, `avatars_upload_duration_seconds`,
+  `avatars_storage_bytes`).
+- **Логи.** JSON от `slog` собираются Promtail'ом в Loki. В записях, сделанных
+  во время обработки запроса, есть `trace_id` — в Grafana рядом с такой
+  строкой появляется кнопка перехода в соответствующий трейс в Jaeger.
+
+Трейсинг можно отключить, оставив `OTEL_EXPORTER_OTLP_ENDPOINT` пустым —
+сервис продолжит работать без Jaeger.
 
 ## Веб-интерфейс
 
