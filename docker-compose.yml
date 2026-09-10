@@ -47,6 +47,9 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # Открывает /minio/v2/metrics/cluster без токена, чтобы Prometheus мог
+      # забирать метрики хранилища.
+      MINIO_PROMETHEUS_AUTH_TYPE: public
     ports:
       - "${MINIO_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
@@ -92,6 +95,8 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
       MINIO_BUCKET: ${MINIO_BUCKET:-avatars}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-jaeger:4317}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${SERVER_PORT:-8080}:8080"
     depends_on:
@@ -119,6 +124,12 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
       MINIO_BUCKET: ${MINIO_BUCKET:-avatars}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-jaeger:4317}
+      METRICS_PORT: ${WORKER_METRICS_PORT:-9091}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      # У воркера нет API, порт нужен только чтобы Prometheus снимал метрики.
+      - "${WORKER_METRICS_PORT:-9091}:9091"
     depends_on:
       postgres:
         condition: service_healthy
@@ -129,10 +140,98 @@ services:
     networks:
       - avatar-network
 
+  # --- Наблюдаемость ---
+
+  # Приём трейсов по OTLP и их просмотр. Коллектор между приложением и
+  # Jaeger не нужен: all-in-one сам слушает OTLP.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: avatar-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "${JAEGER_OTLP_GRPC_PORT:-4317}:4317"
+      - "${JAEGER_OTLP_HTTP_PORT:-4318}:4318"
+    networks:
+      - avatar-network
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: avatar-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - avatar-network
+
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: avatar-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yaml
+    volumes:
+      - ./monitoring/loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    networks:
+      - avatar-network
+
+  # Читает stdout контейнеров через docker.sock, разбирает JSON-логи slog и
+  # отправляет их в Loki.
+  promtail:
+    image: grafana/promtail:3.3.2
+    container_name: avatar-promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail-config.yaml
+    volumes:
+      - ./monitoring/promtail/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks:
+      - avatar-network
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: avatar-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Демонстрационный стенд: дашборды открываются без логина.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+      - loki
+      - jaeger
+    networks:
+      - avatar-network
+
 volumes:
   pgdata:
   rabbitmq_data:
   minio_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:
 
 networks:
   avatar-network:

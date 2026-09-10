@@ -1,0 +1,57 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Логи собираются прямо из Docker: контейнеры пишут JSON в stdout, а
+  # promtail читает их через docker.sock и обогащает метками из compose.
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+
+    relabel_configs:
+      # Имя compose-сервиса (server, worker, postgres, ...) — основная метка,
+      # по которой логи фильтруются в Grafana.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: compose_service
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: compose_project
+      # Оставляем только контейнеры этого проекта.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        regex: "go-avatar-service-template"
+        action: keep
+
+    pipeline_stages:
+      # Логи Go-сервисов — JSON от slog. У остальных контейнеров (postgres,
+      # rabbitmq) формат другой, поэтому все стадии разбора необязательные:
+      # при неудаче строка сохраняется как есть.
+      - json:
+          expressions:
+            level: level
+            service: service
+            msg: msg
+            trace_id: trace_id
+          drop_malformed: false
+
+      # trace_id остаётся полем записи (не меткой): по нему Grafana строит
+      # ссылку в Jaeger через derivedFields, а меткой он создавал бы
+      # неограниченную кардинальность потоков.
+      - labels:
+          level:
+          service:
+
+      - timestamp:
+          source: time
+          format: RFC3339Nano
+          action_on_failure: skip

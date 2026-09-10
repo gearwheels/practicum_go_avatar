@@ -9,14 +9,34 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/domain"
+	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository"
 )
+
+// tracerName — имя инструментирующей библиотеки для спанов бизнес-логики.
+const tracerName = "go-avatar-service/internal/services/avatar"
+
+// tracer возвращает трейсер сервиса аватарок.
+func tracer() trace.Tracer { return otel.Tracer(tracerName) }
+
+// recordError помечает спан ошибкой — вызывается во всех ветках выхода по
+// ошибке, чтобы в Jaeger такие спаны были видны красным.
+func recordError(span trace.Span, err error, msg string) {
+	span.RecordError(err)
+	span.SetStatus(codes.Error, msg)
+}
 
 // ErrForbidden — попытка изменить чужую аватарку.
 var ErrForbidden = errors.New("forbidden")
@@ -54,10 +74,32 @@ func NewService(repo repository.AvatarRepository, storage Storage, publisher Eve
 // Upload сохраняет оригинал аватарки в S3, создаёт запись в БД и публикует
 // событие для асинхронной генерации миниатюр.
 func (s *Service) Upload(ctx context.Context, userID, fileName, mimeType string, size int64, r io.Reader) (domain.Avatar, error) {
+	ctx, span := tracer().Start(ctx, "upload_avatar")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("user_id", userID),
+		attribute.String("file_name", fileName),
+		attribute.Int64("file_size", size),
+		attribute.String("mime_type", mimeType),
+	)
+
+	start := time.Now()
+	var err error
+	defer func() { observability.ObserveUpload(start, err) }()
+
 	id := uuid.New()
 	key := originalKey(id, mimeType)
+	span.SetAttributes(attribute.String("avatar_id", id.String()))
 
-	if err := s.storage.Upload(ctx, key, r, size, mimeType); err != nil {
+	slog.InfoContext(ctx, "uploading avatar",
+		"user_id", userID,
+		"file_size", size,
+		"mime_type", mimeType,
+	)
+
+	if err = s.storage.Upload(ctx, key, r, size, mimeType); err != nil {
+		recordError(span, err, "загрузка оригинала в хранилище")
 		return domain.Avatar{}, fmt.Errorf("загрузка оригинала в хранилище: %w", err)
 	}
 
@@ -71,12 +113,17 @@ func (s *Service) Upload(ctx context.Context, userID, fileName, mimeType string,
 		UploadStatus:     domain.UploadStatusUploaded,
 		ProcessingStatus: domain.ProcessingStatusPending,
 	}
-	avatarRecord, err := s.repo.Create(ctx, avatarRecord)
+	avatarRecord, err = s.repo.Create(ctx, avatarRecord)
 	if err != nil {
+		recordError(span, err, "сохранение метаданных")
 		return domain.Avatar{}, fmt.Errorf("сохранение метаданных: %w", err)
 	}
 
-	if err := s.publisher.PublishProcessEvent(ctx, broker.AvatarProcessEvent{
+	// Объём хранилища на пользователя — бизнес-KPI из ТЗ. Считаем от
+	// фактически сохранённого оригинала.
+	observability.StorageUsage.WithLabelValues(userID).Add(float64(size))
+
+	if err = s.publisher.PublishProcessEvent(ctx, broker.AvatarProcessEvent{
 		AvatarID: id,
 		UserID:   userID,
 		S3Key:    key,
@@ -84,15 +131,25 @@ func (s *Service) Upload(ctx context.Context, userID, fileName, mimeType string,
 		// Оригинал уже сохранён и запись в БД создана — не откатываем
 		// загрузку из-за сбоя публикации, миниатюры можно сгенерировать
 		// позже вручную/повторной публикацией. Ошибку логирует вызывающий код.
+		recordError(span, err, "публикация события обработки")
 		return avatarRecord, fmt.Errorf("публикация события обработки: %w", err)
 	}
 
+	slog.InfoContext(ctx, "avatar uploaded", "avatar_id", id, "user_id", userID)
 	return avatarRecord, nil
 }
 
 // GetMetadata возвращает метаданные аватарки по id.
 func (s *Service) GetMetadata(ctx context.Context, id uuid.UUID) (domain.Avatar, error) {
-	return s.repo.GetByID(ctx, id)
+	ctx, span := tracer().Start(ctx, "get_avatar_metadata",
+		trace.WithAttributes(attribute.String("avatar_id", id.String())))
+	defer span.End()
+
+	a, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		recordError(span, err, "чтение метаданных")
+	}
+	return a, err
 }
 
 // ImageResult — бинарные данные изображения и сведения для HTTP-ответа.
@@ -108,36 +165,61 @@ type ImageResult struct {
 // оригинал (см. решение по WebP/format в плане — параметр format влияет
 // только на заявленный Content-Type, а не на перекодирование).
 func (s *Service) GetImage(ctx context.Context, id uuid.UUID, size string) (ImageResult, error) {
+	ctx, span := tracer().Start(ctx, "get_avatar_image",
+		trace.WithAttributes(
+			attribute.String("avatar_id", id.String()),
+			attribute.String("size", size),
+		))
+	defer span.End()
+
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
+		recordError(span, err, "чтение метаданных")
+		observability.DownloadsTotal.WithLabelValues(size, observability.StatusError).Inc()
 		return ImageResult{}, err
 	}
-	return s.downloadImage(ctx, a, size)
+	return s.downloadImage(ctx, span, a, size)
 }
 
 // GetImageForUser отдаёт текущую (последнюю) аватарку пользователя.
 func (s *Service) GetImageForUser(ctx context.Context, userID, size string) (ImageResult, error) {
+	ctx, span := tracer().Start(ctx, "get_user_avatar_image",
+		trace.WithAttributes(
+			attribute.String("user_id", userID),
+			attribute.String("size", size),
+		))
+	defer span.End()
+
 	a, err := s.repo.GetLatestByUserID(ctx, userID)
 	if err != nil {
+		recordError(span, err, "поиск текущей аватарки")
+		observability.DownloadsTotal.WithLabelValues(size, observability.StatusError).Inc()
 		return ImageResult{}, err
 	}
-	return s.downloadImage(ctx, a, size)
+	return s.downloadImage(ctx, span, a, size)
 }
 
-func (s *Service) downloadImage(ctx context.Context, a domain.Avatar, size string) (ImageResult, error) {
+func (s *Service) downloadImage(ctx context.Context, span trace.Span, a domain.Avatar, size string) (ImageResult, error) {
 	key := a.S3Key
+	servedSize := "original"
 	if size != "" && size != "original" {
 		if thumbKey, ok := a.ThumbnailS3Keys[size]; ok {
 			key = thumbKey
+			servedSize = size
 		}
 		// Если миниатюра ещё не готова — отдаём оригинал, ничего не ломаем.
 	}
+	// Видно в трейсе, когда вместо запрошенной миниатюры ушёл оригинал.
+	span.SetAttributes(attribute.String("served_size", servedSize))
 
 	body, length, err := s.storage.Download(ctx, key)
 	if err != nil {
+		recordError(span, err, "скачивание из хранилища")
+		observability.DownloadsTotal.WithLabelValues(size, observability.StatusError).Inc()
 		return ImageResult{}, fmt.Errorf("скачивание из хранилища: %w", err)
 	}
 
+	observability.DownloadsTotal.WithLabelValues(size, observability.StatusSuccess).Inc()
 	return ImageResult{
 		Body:          body,
 		ContentType:   a.MimeType,
@@ -148,40 +230,78 @@ func (s *Service) downloadImage(ctx context.Context, a domain.Avatar, size strin
 
 // ListForUser возвращает страницу аватарок пользователя.
 func (s *Service) ListForUser(ctx context.Context, userID string, limit, offset int) ([]domain.Avatar, int, error) {
-	return s.repo.ListByUserID(ctx, userID, limit, offset)
+	ctx, span := tracer().Start(ctx, "list_user_avatars",
+		trace.WithAttributes(
+			attribute.String("user_id", userID),
+			attribute.Int("limit", limit),
+			attribute.Int("offset", offset),
+		))
+	defer span.End()
+
+	avatars, total, err := s.repo.ListByUserID(ctx, userID, limit, offset)
+	if err != nil {
+		recordError(span, err, "выборка аватарок пользователя")
+		return nil, 0, err
+	}
+	span.SetAttributes(attribute.Int("total", total))
+	return avatars, total, nil
 }
 
 // DeleteByID мягко удаляет аватарку и публикует событие асинхронной очистки
 // S3. requestingUserID должен совпадать с владельцем — иначе ErrForbidden.
 func (s *Service) DeleteByID(ctx context.Context, id uuid.UUID, requestingUserID string) error {
+	ctx, span := tracer().Start(ctx, "delete_avatar",
+		trace.WithAttributes(
+			attribute.String("avatar_id", id.String()),
+			attribute.String("user_id", requestingUserID),
+		))
+	defer span.End()
+
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
+		recordError(span, err, "чтение аватарки")
+		observability.DeletesTotal.WithLabelValues(observability.StatusError).Inc()
 		return err
 	}
 	if a.UserID != requestingUserID {
+		recordError(span, ErrForbidden, "удаление чужой аватарки")
+		observability.DeletesTotal.WithLabelValues(observability.StatusError).Inc()
 		return ErrForbidden
 	}
-	return s.deleteAvatar(ctx, a)
+	return s.deleteAvatar(ctx, span, a)
 }
 
 // DeleteCurrentForUser удаляет текущую аватарку пользователя userID.
 // requestingUserID (значение заголовка X-User-ID) должен совпадать с userID
 // из пути — иначе ErrForbidden.
 func (s *Service) DeleteCurrentForUser(ctx context.Context, userID, requestingUserID string) error {
+	ctx, span := tracer().Start(ctx, "delete_user_avatar",
+		trace.WithAttributes(attribute.String("user_id", userID)))
+	defer span.End()
+
 	if userID != requestingUserID {
+		recordError(span, ErrForbidden, "удаление чужой аватарки")
+		observability.DeletesTotal.WithLabelValues(observability.StatusError).Inc()
 		return ErrForbidden
 	}
 	a, err := s.repo.GetLatestByUserID(ctx, userID)
 	if err != nil {
+		recordError(span, err, "поиск текущей аватарки")
+		observability.DeletesTotal.WithLabelValues(observability.StatusError).Inc()
 		return err
 	}
-	return s.deleteAvatar(ctx, a)
+	return s.deleteAvatar(ctx, span, a)
 }
 
-func (s *Service) deleteAvatar(ctx context.Context, a domain.Avatar) error {
+func (s *Service) deleteAvatar(ctx context.Context, span trace.Span, a domain.Avatar) error {
 	if err := s.repo.SoftDelete(ctx, a.ID); err != nil {
+		recordError(span, err, "мягкое удаление")
+		observability.DeletesTotal.WithLabelValues(observability.StatusError).Inc()
 		return err
 	}
+
+	// Освободившийся объём вычитаем из общей занятости пользователя.
+	observability.StorageUsage.WithLabelValues(a.UserID).Sub(float64(a.SizeBytes))
 
 	keys := []string{a.S3Key}
 	for _, k := range a.ThumbnailS3Keys {
@@ -192,8 +312,13 @@ func (s *Service) deleteAvatar(ctx context.Context, a domain.Avatar) error {
 		AvatarID: a.ID,
 		S3Keys:   keys,
 	}); err != nil {
+		recordError(span, err, "публикация события удаления")
+		observability.DeletesTotal.WithLabelValues(observability.StatusError).Inc()
 		return fmt.Errorf("публикация события удаления: %w", err)
 	}
+
+	observability.DeletesTotal.WithLabelValues(observability.StatusSuccess).Inc()
+	slog.InfoContext(ctx, "avatar deleted", "avatar_id", a.ID, "user_id", a.UserID)
 	return nil
 }
 

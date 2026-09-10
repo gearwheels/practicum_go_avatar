@@ -3,8 +3,15 @@ package broker
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
+
+	"go-avatar-service/internal/observability"
 )
 
 // MaxRetries — сколько раз воркер пытается обработать сообщение прежде
@@ -57,21 +64,42 @@ func (c *Consumer) Consume(ctx context.Context, queue string, handler HandlerFun
 }
 
 func (c *Consumer) handleDelivery(ctx context.Context, queue string, d amqp.Delivery, handler HandlerFunc) {
+	// Достаём traceparent из заголовков сообщения: так обработка в воркере
+	// становится продолжением трейса, начатого в HTTP-запросе к серверу.
+	ctx = otel.GetTextMapPropagator().Extract(ctx, amqpHeaderCarrier(d.Headers))
+
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "consume "+queue,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			semconv.MessagingSystemRabbitmq,
+			semconv.MessagingDestinationName(queue),
+		),
+	)
+	defer span.End()
+
+	start := time.Now()
 	err := handler(ctx, d.Body)
+	observability.WorkerMessageDuration.WithLabelValues(queue).Observe(time.Since(start).Seconds())
+
 	if err == nil {
+		observability.WorkerMessagesTotal.WithLabelValues(queue, observability.StatusSuccess).Inc()
 		if ackErr := d.Ack(false); ackErr != nil {
-			slog.Error("не удалось подтвердить сообщение", "queue", queue, "error", ackErr)
+			slog.ErrorContext(ctx, "не удалось подтвердить сообщение", "queue", queue, "error", ackErr)
 		}
 		return
 	}
 
-	slog.Error("ошибка обработки сообщения", "queue", queue, "error", err)
+	observability.WorkerMessagesTotal.WithLabelValues(queue, observability.StatusError).Inc()
+	span.RecordError(err)
+	span.SetStatus(codes.Error, "обработка сообщения")
+	slog.ErrorContext(ctx, "ошибка обработки сообщения", "queue", queue, "error", err)
 
 	retryCount := retryCountFromHeaders(d.Headers)
 	if retryCount >= MaxRetries {
 		// Попытки исчерпаны — отклоняем без requeue, сообщение уходит в DLQ.
+		observability.WorkerMessagesTotal.WithLabelValues(queue, "dead_lettered").Inc()
 		if nackErr := d.Nack(false, false); nackErr != nil {
-			slog.Error("не удалось отклонить сообщение", "queue", queue, "error", nackErr)
+			slog.ErrorContext(ctx, "не удалось отклонить сообщение", "queue", queue, "error", nackErr)
 		}
 		return
 	}
@@ -81,6 +109,9 @@ func (c *Consumer) handleDelivery(ctx context.Context, queue string, d amqp.Deli
 		headers[k] = v
 	}
 	headers[retryCountHeader] = retryCount + 1
+	// Перезаписываем traceparent текущим контекстом, чтобы повтор был виден
+	// как продолжение этой попытки, а не копией исходной.
+	otel.GetTextMapPropagator().Inject(ctx, amqpHeaderCarrier(headers))
 
 	republishErr := c.ch.PublishWithContext(ctx, "", queue, false, false, amqp.Publishing{
 		ContentType:  d.ContentType,
@@ -89,10 +120,11 @@ func (c *Consumer) handleDelivery(ctx context.Context, queue string, d amqp.Deli
 		Body:         d.Body,
 	})
 	if republishErr != nil {
-		slog.Error("не удалось переотправить сообщение на повтор", "queue", queue, "error", republishErr)
+		slog.ErrorContext(ctx, "не удалось переотправить сообщение на повтор", "queue", queue, "error", republishErr)
 		_ = d.Nack(false, true)
 		return
 	}
+	observability.WorkerMessagesTotal.WithLabelValues(queue, "retried").Inc()
 	_ = d.Ack(false)
 }
 
