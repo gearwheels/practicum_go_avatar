@@ -180,10 +180,22 @@ func requestLogger() echo.MiddlewareFunc {
 				"remote_ip", v.RemoteIP,
 			}
 			if v.Error != nil {
-				slog.ErrorContext(ctx, "request", append(attrs, "error", v.Error)...)
-				return nil
+				attrs = append(attrs, "error", v.Error)
 			}
-			slog.InfoContext(ctx, "request", attrs...)
+
+			// Уровень выбирается по коду ответа, а не только по v.Error:
+			// сгенерированные хендлеры заворачивают ошибку в 500-ответ и
+			// возвращают nil, поэтому по v.Error реальные сбои сервиса не
+			// отличить от успешных запросов — и поиск по level=ERROR во
+			// время инцидента не находил бы ничего.
+			switch {
+			case v.Status >= 500:
+				slog.ErrorContext(ctx, "request", attrs...)
+			case v.Status >= 400:
+				slog.WarnContext(ctx, "request", attrs...)
+			default:
+				slog.InfoContext(ctx, "request", attrs...)
+			}
 			return nil
 		},
 	})
