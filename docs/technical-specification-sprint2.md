@@ -176,7 +176,9 @@ groups:
 Определены в [internal/observability/metrics.go](../internal/observability/metrics.go).
 
 - **Бизнесовые:** `avatars_uploads_total{status}`, `avatars_upload_duration_seconds{status}`, `avatars_storage_bytes{user_id}` (ровно как в ТЗ), плюс `avatars_deletes_total`, `avatars_downloads_total`, `avatars_thumbnails_generated_total`.
+  - `avatars_storage_bytes` в отличие от примера в ТЗ — **не** `GaugeVec` в памяти процесса: такое значение обнулялось бы на каждом рестарте и расходилось бы с реальностью при сбое между записью в БД и обновлением счётчика. Метрика считается запросом к БД в момент скрейпа ([storage_metrics.go](../internal/observability/storage_metrics.go)); при недоступности базы отдаётся `avatars_storage_stats_up 0`, а остальные метрики продолжают собираться. Регистрируется только в сервере, чтобы не дублировать ряды; на дашборде используется `max by (user_id)`, так как одно и то же значение отдаёт каждая реплика.
 - **HTTP (RED):** `avatar_requests_total`, `avatar_request_duration_seconds` — middleware `echoprometheus`.
+  - Порядок middleware ([cmd/server/main.go](../cmd/server/main.go), `useMiddleware`): `Recover` стоит дважды. Внешний защищает всю цепочку — иначе паника в самих middleware (например, в логе доступа) оборвала бы соединение без записи в лог и метрики. Внутренний превращает панику обработчика в обычный 500, который видят лог доступа, метрики и трейс — с одним лишь внешним Recover паника пролетала бы сквозь них незамеченной. Оба случая покрыты тестами в `cmd/server/main_test.go`.
 - **Инфраструктурные:** соединения пула БД (`db_pool_*`, собственный коллектор поверх `pgxpool.Stat()`), глубина очередей — из метрик самого RabbitMQ (порт 15692), метрики MinIO — с `/minio/v2/metrics/cluster`.
 
 Эндпоинты: `http://localhost:8080/metrics` (сервер) и `http://localhost:9091/metrics` (воркер, своего API у него нет).

@@ -425,7 +425,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 6, "x": 18, "y": 24 },
       "targets": [
-        { "refId": "A", "expr": "topk(10, avatars_storage_bytes)", "legendFormat": "{{user_id}}" }
+        { "refId": "A", "expr": "topk(10, max by (user_id) (avatars_storage_bytes))", "legendFormat": "{{user_id}}" }
       ],
       "fieldConfig": {
         "defaults": {

@@ -121,6 +121,14 @@ func main() {
 	}
 
 	repo := postgres.NewAvatarRepository(pool)
+
+	// Объём хранилища считается из БД на скрейпе. Регистрируется только в
+	// сервере: воркер работает с той же базой, и дублировать ряды не нужно.
+	if err := observability.RegisterStorageUsageMetrics(repo); err != nil {
+		logger.Error("не удалось зарегистрировать метрики хранилища", "error", err)
+		os.Exit(1)
+	}
+
 	publisher := broker.NewPublisher(amqpChannel)
 	avatarService := avatar.NewService(repo, minioStorage, publisher)
 	webHandlers := webui.NewHandlers(avatarService)
@@ -135,13 +143,7 @@ func main() {
 
 	e := echo.New()
 	e.HideBanner = true
-
-	// Порядок важен: otelecho первым создаёт спан запроса, поэтому и метрики,
-	// и лог доступа уже видят trace_id.
-	e.Use(otelecho.Middleware(serviceName))
-	e.Use(echoprometheus.NewMiddleware("avatar"))
-	e.Use(requestLogger())
-	e.Use(middleware.Recover())
+	useMiddleware(e)
 
 	e.GET("/metrics", echoprometheus.NewHandler())
 	e.Static("/", "web/static")
@@ -164,6 +166,30 @@ func main() {
 	if err := e.Shutdown(shutdownCtx); err != nil {
 		logger.Error("ошибка при остановке сервера", "error", err)
 	}
+}
+
+// useMiddleware выстраивает цепочку middleware сервера. Echo выполняет их в
+// порядке регистрации: первый зарегистрированный — самый внешний.
+//
+// Recover стоит дважды, и это сознательно:
+//
+//   - внешний (первый) защищает всю цепочку. Без него паника в самих
+//     middleware — например, в LogValuesFunc, которая вызывается уже после
+//     обработчика, или в otelecho — не была бы перехвачена, и клиент получил
+//     бы оборванное соединение вместо 500 без единой записи в логе и метриках;
+//   - внутренний (последний) ловит панику обработчика прямо у обработчика и
+//     превращает её в обычный ответ 500. Если бы Recover был только внешним,
+//     паника пролетела бы сквозь лог доступа, метрики и otelecho, и этот 500
+//     не попал бы ни в лог, ни в метрики, ни в статус спана.
+//
+// otelecho идёт сразу за внешним Recover, чтобы спан запроса создавался
+// раньше метрик и лога доступа — они видят trace_id.
+func useMiddleware(e *echo.Echo) {
+	e.Use(middleware.Recover())
+	e.Use(otelecho.Middleware(serviceName))
+	e.Use(echoprometheus.NewMiddleware("avatar"))
+	e.Use(requestLogger())
+	e.Use(middleware.Recover())
 }
 
 // requestLogger пишет структурированный лог доступа через slog. Контекст

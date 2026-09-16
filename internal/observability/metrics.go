@@ -35,17 +35,11 @@ var (
 		[]string{"status"},
 	)
 
-	// StorageUsage разбит по пользователям согласно ТЗ. В реальном проде
-	// лейбл user_id — источник неограниченной кардинальности (по временному
-	// ряду на каждого пользователя), для продакшена его стоило бы заменить
-	// на общий счётчик объёма.
-	StorageUsage = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "avatars_storage_bytes",
-			Help: "Total storage used by avatars",
-		},
-		[]string{"user_id"},
-	)
+	// avatars_storage_bytes не объявлен здесь как Gauge: значение в памяти
+	// процесса обнулялось бы на каждом рестарте и расходилось бы с
+	// реальностью при сбое между записью в БД и обновлением счётчика.
+	// Вместо этого метрика считается из БД в момент скрейпа — см.
+	// RegisterStorageUsageMetrics.
 
 	DeletesTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{

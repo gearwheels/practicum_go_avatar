@@ -119,10 +119,6 @@ func (s *Service) Upload(ctx context.Context, userID, fileName, mimeType string,
 		return domain.Avatar{}, fmt.Errorf("сохранение метаданных: %w", err)
 	}
 
-	// Объём хранилища на пользователя — бизнес-KPI из ТЗ. Считаем от
-	// фактически сохранённого оригинала.
-	observability.StorageUsage.WithLabelValues(userID).Add(float64(size))
-
 	if err = s.publisher.PublishProcessEvent(ctx, broker.AvatarProcessEvent{
 		AvatarID: id,
 		UserID:   userID,
@@ -178,7 +174,12 @@ func (s *Service) GetImage(ctx context.Context, id uuid.UUID, size string) (Imag
 		observability.DownloadsTotal.WithLabelValues(size, observability.StatusError).Inc()
 		return ImageResult{}, err
 	}
-	return s.downloadImage(ctx, span, a, size)
+
+	res, err := s.downloadImage(ctx, a, size)
+	if err != nil {
+		recordError(span, err, "скачивание изображения")
+	}
+	return res, err
 }
 
 // GetImageForUser отдаёт текущую (последнюю) аватарку пользователя.
@@ -196,10 +197,25 @@ func (s *Service) GetImageForUser(ctx context.Context, userID, size string) (Ima
 		observability.DownloadsTotal.WithLabelValues(size, observability.StatusError).Inc()
 		return ImageResult{}, err
 	}
-	return s.downloadImage(ctx, span, a, size)
+
+	res, err := s.downloadImage(ctx, a, size)
+	if err != nil {
+		recordError(span, err, "скачивание изображения")
+	}
+	return res, err
 }
 
-func (s *Service) downloadImage(ctx context.Context, span trace.Span, a domain.Avatar, size string) (ImageResult, error) {
+// downloadImage открывает собственный дочерний спан: спан вызывающего кода
+// не передаётся параметром, а наследуется через ctx — так в трейсе видно
+// отдельный шаг скачивания, и функцию можно вызывать откуда угодно.
+func (s *Service) downloadImage(ctx context.Context, a domain.Avatar, size string) (ImageResult, error) {
+	ctx, span := tracer().Start(ctx, "download_image",
+		trace.WithAttributes(
+			attribute.String("avatar_id", a.ID.String()),
+			attribute.String("requested_size", size),
+		))
+	defer span.End()
+
 	key := a.S3Key
 	servedSize := "original"
 	if size != "" && size != "original" {
@@ -268,7 +284,12 @@ func (s *Service) DeleteByID(ctx context.Context, id uuid.UUID, requestingUserID
 		observability.DeletesTotal.WithLabelValues(observability.StatusError).Inc()
 		return ErrForbidden
 	}
-	return s.deleteAvatar(ctx, span, a)
+
+	if err := s.deleteAvatar(ctx, a); err != nil {
+		recordError(span, err, "удаление аватарки")
+		return err
+	}
+	return nil
 }
 
 // DeleteCurrentForUser удаляет текущую аватарку пользователя userID.
@@ -290,18 +311,29 @@ func (s *Service) DeleteCurrentForUser(ctx context.Context, userID, requestingUs
 		observability.DeletesTotal.WithLabelValues(observability.StatusError).Inc()
 		return err
 	}
-	return s.deleteAvatar(ctx, span, a)
+
+	if err := s.deleteAvatar(ctx, a); err != nil {
+		recordError(span, err, "удаление аватарки")
+		return err
+	}
+	return nil
 }
 
-func (s *Service) deleteAvatar(ctx context.Context, span trace.Span, a domain.Avatar) error {
+// deleteAvatar открывает собственный дочерний спан (см. комментарий к
+// downloadImage) — родительский спан наследуется через ctx.
+func (s *Service) deleteAvatar(ctx context.Context, a domain.Avatar) error {
+	ctx, span := tracer().Start(ctx, "soft_delete_avatar",
+		trace.WithAttributes(
+			attribute.String("avatar_id", a.ID.String()),
+			attribute.String("user_id", a.UserID),
+		))
+	defer span.End()
+
 	if err := s.repo.SoftDelete(ctx, a.ID); err != nil {
 		recordError(span, err, "мягкое удаление")
 		observability.DeletesTotal.WithLabelValues(observability.StatusError).Inc()
 		return err
 	}
-
-	// Освободившийся объём вычитаем из общей занятости пользователя.
-	observability.StorageUsage.WithLabelValues(a.UserID).Sub(float64(a.SizeBytes))
 
 	keys := []string{a.S3Key}
 	for _, k := range a.ThumbnailS3Keys {
