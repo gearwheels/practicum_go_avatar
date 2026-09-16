@@ -132,6 +132,42 @@ func (r *AvatarRepository) UpdateThumbnails(ctx context.Context, id uuid.UUID, t
 	return nil
 }
 
+// StorageUsageByUser возвращает суммарный размер оригиналов неудалённых
+// аватарок по пользователям. Используется метрикой avatars_storage_bytes,
+// которая считается на каждом скрейпе Prometheus.
+//
+// Запрос агрегирует все живые строки; для учебного объёма данных это дёшево.
+// На больших таблицах агрегат стоило бы поддерживать отдельно (триггером или
+// материализованным представлением), а не пересчитывать на каждом скрейпе.
+func (r *AvatarRepository) StorageUsageByUser(ctx context.Context) (map[string]int64, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT user_id, COALESCE(SUM(size_bytes), 0)
+		FROM avatars
+		WHERE deleted_at IS NULL
+		GROUP BY user_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("подсчёт объёма хранилища: %w", err)
+	}
+	defer rows.Close()
+
+	usage := make(map[string]int64)
+	for rows.Next() {
+		var (
+			userID string
+			size   int64
+		)
+		if err := rows.Scan(&userID, &size); err != nil {
+			return nil, fmt.Errorf("чтение объёма хранилища: %w", err)
+		}
+		usage[userID] = size
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("подсчёт объёма хранилища: %w", err)
+	}
+	return usage, nil
+}
+
 const selectQuery = `
 	SELECT id, user_id, file_name, mime_type, size_bytes, s3_key, thumbnail_s3_keys,
 	       upload_status, processing_status, created_at, updated_at, deleted_at

@@ -1,0 +1,15 @@
+{{- if gt (int .Values.server.autoscaling.minReplicas) 1 }}
+# Не даём вытеснить сразу все реплики при обслуживании узлов (drain).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-server
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" (dict "ctx" . "component" "server") | nindent 6 }}
+{{- end }}

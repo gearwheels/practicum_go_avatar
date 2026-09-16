@@ -5,6 +5,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 )
 
 // Config — конфигурация, общая для server и worker. Поле ServerPort нужно
@@ -21,6 +23,28 @@ type Config struct {
 	MinioPassword string
 	MinioUseSSL   bool
 	MinioBucket   string
+
+	// Наблюдаемость. Все поля опциональны: с пустым OTLPEndpoint трейсинг
+	// просто выключается, и сервис работает без Jaeger.
+	OTLPEndpoint string
+	MetricsPort  string
+	LogLevel     string
+
+	// RunMigrations включает прогон миграций при старте сервера. По
+	// умолчанию true — так работает docker-compose с одним экземпляром.
+	// В Kubernetes выключается: там миграции накатывает отдельный Job
+	// (Helm-хук), иначе несколько реплик стартуют наперегонки.
+	RunMigrations bool
+
+	// Rate limiting входящих запросов (на один под). RateLimitRPS <= 0
+	// выключает ограничение.
+	RateLimitRPS   float64
+	RateLimitBurst int
+
+	// Circuit breaker для внешних зависимостей (PostgreSQL, S3, RabbitMQ):
+	// сколько отказов подряд размыкают брейкер и на сколько.
+	BreakerFailureThreshold uint32
+	BreakerOpenTimeout      time.Duration
 }
 
 // Load читает конфигурацию из переменных окружения. Возвращает ошибку, если
@@ -35,6 +59,33 @@ func Load() (Config, error) {
 		MinioPassword: os.Getenv("MINIO_ROOT_PASSWORD"),
 		MinioUseSSL:   getEnv("MINIO_USE_SSL", "false") == "true",
 		MinioBucket:   getEnv("MINIO_BUCKET", "avatars"),
+		// Без fallback: пустое значение должно выключать трейсинг. С
+		// getEnv("...", "jaeger:4317") пустая строка означала бы «не задано»,
+		// и сервис в кластере без Jaeger бесконечно ломился бы по этому
+		// адресу, а при остановке писал ошибку экспорта.
+		OTLPEndpoint:  os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		MetricsPort:   getEnv("METRICS_PORT", "9091"),
+		LogLevel:      getEnv("LOG_LEVEL", "info"),
+		RunMigrations: getEnv("RUN_MIGRATIONS", "true") != "false",
+	}
+
+	var err error
+	if cfg.RateLimitRPS, err = parseFloat("RATE_LIMIT_RPS", "20"); err != nil {
+		return Config{}, err
+	}
+	if cfg.RateLimitBurst, err = parseInt("RATE_LIMIT_BURST", "40"); err != nil {
+		return Config{}, err
+	}
+	threshold, err := parseInt("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5")
+	if err != nil {
+		return Config{}, err
+	}
+	if threshold <= 0 {
+		return Config{}, fmt.Errorf("CIRCUIT_BREAKER_FAILURE_THRESHOLD должен быть больше нуля")
+	}
+	cfg.BreakerFailureThreshold = uint32(threshold)
+	if cfg.BreakerOpenTimeout, err = time.ParseDuration(getEnv("CIRCUIT_BREAKER_OPEN_TIMEOUT", "30s")); err != nil {
+		return Config{}, fmt.Errorf("CIRCUIT_BREAKER_OPEN_TIMEOUT: %w", err)
 	}
 
 	var missing []string
@@ -59,4 +110,20 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func parseFloat(key, fallback string) (float64, error) {
+	v, err := strconv.ParseFloat(getEnv(key, fallback), 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return v, nil
+}
+
+func parseInt(key, fallback string) (int, error) {
+	v, err := strconv.Atoi(getEnv(key, fallback))
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return v, nil
 }

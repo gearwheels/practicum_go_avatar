@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -18,6 +19,7 @@ import (
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/domain"
 	"go-avatar-service/internal/repository"
+	"go-avatar-service/internal/resilience"
 	"go-avatar-service/internal/services/avatar"
 	"go-avatar-service/internal/webui"
 )
@@ -360,4 +362,38 @@ func TestHealthCheck_DownWhenComponentFails(t *testing.T) {
 	down, isDown := resp.(HealthCheck503JSONResponse)
 	require.True(t, isDown, "ожидался 503, получено %T", resp)
 	require.Equal(t, HealthStatusStatusDown, down.Status)
+}
+
+// ---------- недоступность зависимостей (circuit breaker) ----------
+
+// openBreakerRepo имитирует репозиторий за разомкнутым брейкером.
+type openBreakerRepo struct{ *fakeRepo }
+
+func (openBreakerRepo) GetByID(context.Context, uuid.UUID) (domain.Avatar, error) {
+	return domain.Avatar{}, fmt.Errorf("postgres: %w", resilience.ErrCircuitOpen)
+}
+
+func newUnavailableServer() *AvatarServer {
+	svc := avatar.NewService(openBreakerRepo{newFakeRepo()}, newFakeStorage(), fakePublisher{})
+	return NewAvatarServer(svc, webui.NewHandlers(svc), fakePinger{}, fakePinger{}, fakePinger{})
+}
+
+func TestGetAvatarMetadata_CircuitOpenIs503(t *testing.T) {
+	s := newUnavailableServer()
+	resp, err := s.GetAvatarMetadata(context.Background(), GetAvatarMetadataRequestObject{AvatarId: uuid.New()})
+	require.NoError(t, err)
+	r, ok := resp.(GetAvatarMetadata503JSONResponse)
+	require.True(t, ok, "ожидался 503, получено %T", resp)
+	require.Equal(t, "Service temporarily unavailable", r.Error)
+}
+
+func TestDeleteAvatarById_CircuitOpenIs503(t *testing.T) {
+	s := newUnavailableServer()
+	resp, err := s.DeleteAvatarById(context.Background(), DeleteAvatarByIdRequestObject{
+		AvatarId: uuid.New(),
+		Params:   DeleteAvatarByIdParams{XUserID: "alice"},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(DeleteAvatarById503JSONResponse)
+	require.True(t, ok, "ожидался 503, получено %T", resp)
 }

@@ -1,0 +1,21 @@
+{{- if .Values.grafanaDashboards.enabled }}
+# Дашборды Grafana. Sidecar Grafana (kube-prometheus-stack) находит ConfigMap
+# по метке во всех namespace и загружает JSON без перезапуска Grafana.
+#
+# avatar-service.json — копия monitoring/grafana/dashboards/avatar-service.json
+# (тот же дашборд, что в docker-compose); синхронизируется скриптом
+# scripts/render-k8s.sh.
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gophprofile.fullname" $ }}-dashboard-{{ base $path | trimSuffix ".json" }}
+  labels:
+    {{- include "gophprofile.labels" $ | nindent 4 }}
+    {{ $.Values.grafanaDashboards.label }}: {{ $.Values.grafanaDashboards.labelValue | quote }}
+data:
+  {{ base $path }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+{{- end }}
+{{- end }}
