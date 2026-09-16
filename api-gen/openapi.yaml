@@ -13,8 +13,8 @@ info:
 servers:
   - url: http://localhost:8080
     description: Локальное окружение разработки
-  - url: https://api.gophprofile.example.com
-    description: Production
+  - url: https://avatars.example.com
+    description: Production (Ingress в Kubernetes, см. helm/gophprofile/values-prod.yaml)
 
 tags:
   - name: Avatars
@@ -337,11 +337,59 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthStatus'
               example:
-                status: "degraded"
+                status: "down"
                 components:
                   database: { status: "ok", latency_ms: 4 }
                   s3: { status: "error", error: "connection timeout" }
                   broker: { status: "ok", latency_ms: 6 }
+
+  /livez:
+    get:
+      tags: [Health]
+      summary: Проба жизнеспособности (liveness)
+      description: >
+        В отличие от /health не обращается к внешним зависимостям. Отдаёт 503
+        только при состоянии, из которого процесс не может восстановиться сам
+        (закрытое соединение с брокером). Используется в livenessProbe
+        Kubernetes: проверка зависимостей в liveness приводила бы к
+        одновременному перезапуску всех реплик при кратковременной
+        недоступности БД.
+      operationId: livenessCheck
+      responses:
+        '200':
+          description: Процесс работоспособен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessStatus'
+              example:
+                status: "ok"
+        '503':
+          description: Процесс в невосстановимом состоянии, требуется перезапуск
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessStatus'
+              example:
+                status: "down"
+                reason: "amqp connection is closed"
+
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Метрики Prometheus
+      description: >
+        Метрики в формате Prometheus text exposition: HTTP-метрики (RED),
+        бизнес-метрики (avatars_*) и статистика пула соединений с БД.
+        Обслуживается middleware, а не сгенерированным обработчиком.
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Метрики в текстовом формате Prometheus
+          content:
+            text/plain:
+              schema:
+                type: string
 
   /web/upload:
     get:
@@ -563,6 +611,16 @@ components:
             broker:
               $ref: '#/components/schemas/ComponentStatus'
       required: [status, components]
+
+    LivenessStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, down]
+        reason:
+          type: string
+      required: [status]
 
     Error:
       type: object

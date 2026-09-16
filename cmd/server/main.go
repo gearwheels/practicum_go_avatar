@@ -77,9 +77,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := postgres.RunMigrations(cfg.DatabaseURL, "migrations"); err != nil {
-		logger.Error("не удалось применить миграции", "error", err)
-		os.Exit(1)
+	// В Kubernetes миграции накатывает отдельный Job (Helm-хук), поэтому там
+	// RUN_MIGRATIONS=false: иначе несколько реплик стартуют наперегонки, и
+	// сбой посреди миграции оставит схему в состоянии dirty, после чего
+	// падать при старте будут уже все поды.
+	if cfg.RunMigrations {
+		if err := postgres.RunMigrations(cfg.DatabaseURL, "migrations"); err != nil {
+			logger.Error("не удалось применить миграции", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		logger.Info("миграции при старте пропущены (RUN_MIGRATIONS=false)")
 	}
 
 	minioStorage, err := storage.NewMinioStorage(cfg.MinioEndpoint, cfg.MinioUser, cfg.MinioPassword, cfg.MinioUseSSL, cfg.MinioBucket)

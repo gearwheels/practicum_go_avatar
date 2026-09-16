@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Генерирует простые манифесты Kubernetes в k8s/ из Helm-чарта.
+#
+# Единый источник правды — чарт в helm/gophprofile. Каталог k8s/ нужен для
+# тех, кто хочет применить конфигурацию обычным `kubectl apply` без Helm,
+# и для чтения на ревью. Не редактируйте k8s/ вручную: изменения потеряются
+# при следующем запуске этого скрипта.
+#
+# Использование:
+#   ./scripts/render-k8s.sh
+set -euo pipefail
+
+CHART_DIR="helm/gophprofile"
+OUT_DIR="k8s"
+RELEASE="gophprofile"
+NAMESPACE="gophprofile"
+
+command -v helm >/dev/null 2>&1 || { echo "helm не найден в PATH" >&2; exit 1; }
+
+rm -rf "${OUT_DIR:?}"/*.yaml
+mkdir -p "$OUT_DIR"
+
+echo "Рендерю $CHART_DIR -> $OUT_DIR ..."
+
+# --output-dir раскладывает ресурсы по отдельным файлам, повторяя структуру
+# templates/ — так манифесты удобнее читать и применять выборочно.
+helm template "$RELEASE" "$CHART_DIR" \
+  --namespace "$NAMESPACE" \
+  --values "$CHART_DIR/values.yaml" \
+  --output-dir "$OUT_DIR.tmp" >/dev/null
+
+# Переносим из вложенной структуры (<chart>/templates/*.yaml) в плоский k8s/
+find "$OUT_DIR.tmp" -name '*.yaml' -exec mv {} "$OUT_DIR"/ \;
+rm -rf "$OUT_DIR.tmp"
+
+# Шапка с пометкой о генерации
+for f in "$OUT_DIR"/*.yaml; do
+  tmp="$f.tmp"
+  {
+    echo "# СГЕНЕРИРОВАНО автоматически из helm/gophprofile — не редактируйте вручную."
+    echo "# Обновить: ./scripts/render-k8s.sh"
+    echo "#"
+    echo "# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения"
+    echo "# используйте Helm напрямую с нужным values-файлом."
+    cat "$f"
+  } > "$tmp"
+  mv "$tmp" "$f"
+done
+
+echo "Готово. Файлов: $(find "$OUT_DIR" -name '*.yaml' | wc -l)"
+echo "Применить: kubectl apply -n $NAMESPACE -f $OUT_DIR/"

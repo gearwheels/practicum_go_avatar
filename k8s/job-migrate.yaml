@@ -1,0 +1,86 @@
+# СГЕНЕРИРОВАНО автоматически из helm/gophprofile — не редактируйте вручную.
+# Обновить: ./scripts/render-k8s.sh
+#
+# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения
+# используйте Helm напрямую с нужным values-файлом.
+---
+# Source: gophprofile/templates/job-migrate.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gophprofile-migrate
+  labels:
+    helm.sh/chart: gophprofile-0.1.0
+    app.kubernetes.io/name: gophprofile
+    app.kubernetes.io/instance: gophprofile
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gophprofile
+    app.kubernetes.io/component: migrate
+  annotations:
+    # post-install, а не pre-install: на чистой установке Postgres создаётся
+    # самим чартом, а хуки pre-install выполняются ДО применения манифестов —
+    # то есть pre-install-джоба ждала бы базу, которой ещё нет, и установка
+    # вставала бы намертво.
+    # При обновлении используется pre-upgrade: схема должна быть готова
+    # раньше, чем начнут выкатываться новые поды.
+    "helm.sh/hook": post-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  # Даже с правильным порядком под Postgres может быть ещё не готов принимать
+  # соединения — бинарь migrate дополнительно ретраит подключение внутри себя.
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: gophprofile-0.1.0
+        app.kubernetes.io/name: gophprofile
+        app.kubernetes.io/instance: gophprofile
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: gophprofile
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: gophprofile
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: "gophprofile:local"
+          imagePullPolicy: IfNotPresent
+          command: ["./migrate"]
+          envFrom:
+            - configMapRef:
+                name: gophprofile-config
+            - secretRef:
+                name: gophprofile-secrets
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+              cpu: 250m
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+

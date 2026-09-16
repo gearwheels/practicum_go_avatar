@@ -237,6 +237,29 @@ func (s *AvatarServer) HealthCheck(ctx context.Context, request HealthCheckReque
 	return HealthCheck200JSONResponse(status), nil
 }
 
+// LivenessCheck отвечает на /livez — пробу жизнеспособности для Kubernetes.
+//
+// В отличие от HealthCheck здесь намеренно НЕТ обращений к БД, S3 и брокеру
+// по сети: /health отдаёт 503 при недоступности любой зависимости, и если бы
+// его использовали в livenessProbe, kubelet перезапускал бы разом все реплики
+// во время кратковременной недоступности Postgres — то есть добивал бы
+// систему, которой и так плохо.
+//
+// Проверяется только невосстановимое состояние процесса: соединение с
+// брокером устанавливается один раз при старте и не переподключается,
+// поэтому закрытое соединение означает, что под уже не сможет публиковать
+// события и его нужно перезапустить. brokerPinger.Ping для AMQP — это
+// проверка флага IsClosed(), без сетевого вызова.
+func (s *AvatarServer) LivenessCheck(ctx context.Context, request LivenessCheckRequestObject) (LivenessCheckResponseObject, error) {
+	if s.brokerPinger != nil {
+		if err := s.brokerPinger.Ping(ctx); err != nil {
+			reason := err.Error()
+			return LivenessCheck503JSONResponse{Status: LivenessStatusStatusDown, Reason: &reason}, nil
+		}
+	}
+	return LivenessCheck200JSONResponse{Status: LivenessStatusStatusOk}, nil
+}
+
 // ---------- Веб-интерфейс ----------
 
 func (s *AvatarServer) GetUploadPage(ctx context.Context, request GetUploadPageRequestObject) (GetUploadPageResponseObject, error) {

@@ -1,0 +1,164 @@
+{{- if .Values.networkPolicy.enabled }}
+# Модель: всё запрещено, кроме явно разрешённого. Поды приложения могут
+# ходить только в свою инфраструктуру и в DNS, а принимать трафик — только
+# от ingress-контроллера и системы мониторинга.
+#
+# Внимание: политики применяет CNI. Дефолтный kindnet в kind их НЕ
+# обеспечивает — манифесты будут приняты кластером, но фактической изоляции
+# на локальном стенде не будет (нужен, например, Calico).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-default-deny
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "gophprofile.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-server
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" (dict "ctx" . "component" "server") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Пользовательский трафик приходит только через ingress-контроллер.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.server.containerPort }}
+    # Скрейп метрик из namespace мониторинга.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.server.containerPort }}
+  egress:
+    {{- include "gophprofile.egressRules" . | nindent 4 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-worker
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # У воркера нет API: внутрь пускаем только скрейп метрик.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.worker.metricsPort }}
+  egress:
+    {{- include "gophprofile.egressRules" . | nindent 4 }}
+---
+# Джобы (миграции, создание бакета) тоже попадают под default-deny, потому
+# что несут общие метки релиза. Без собственных правил у них не работает
+# даже DNS, и Job зависает на таймаутах резолва — поэтому правила нужны
+# отдельно, а не только для server/worker.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-jobs
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["migrate", "minio-init"]
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ .Release.Name | quote }}]
+  policyTypes:
+    - Egress
+  egress:
+    {{- include "gophprofile.egressRules" . | nindent 4 }}
+---
+{{- if or .Values.infra.postgres.enabled .Values.infra.rabbitmq.enabled .Values.infra.minio.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-infra
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["postgres", "rabbitmq", "minio"]
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ .Release.Name | quote }}]
+  policyTypes:
+    - Ingress
+  ingress:
+    # К инфраструктуре ходят только поды этого релиза.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "gophprofile.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Общие правила исходящего трафика: DNS + собственная инфраструктура.
+Вынесено в шаблон, чтобы сервер и воркер не расходились.
+*/}}
+{{- define "gophprofile.egressRules" -}}
+# DNS — иначе поды не разрешат имена сервисов.
+- to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+# Собственная инфраструктура релиза: Postgres, RabbitMQ, MinIO.
+- to:
+    - podSelector:
+        matchExpressions:
+          - key: app.kubernetes.io/component
+            operator: In
+            values: ["postgres", "rabbitmq", "minio"]
+  ports:
+    - protocol: TCP
+      port: 5432
+    - protocol: TCP
+      port: 5672
+    - protocol: TCP
+      port: 9000
+{{- end -}}

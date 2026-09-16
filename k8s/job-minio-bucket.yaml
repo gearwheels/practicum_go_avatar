@@ -1,0 +1,76 @@
+# СГЕНЕРИРОВАНО автоматически из helm/gophprofile — не редактируйте вручную.
+# Обновить: ./scripts/render-k8s.sh
+#
+# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения
+# используйте Helm напрямую с нужным values-файлом.
+---
+# Source: gophprofile/templates/job-minio-bucket.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gophprofile-minio-bucket
+  labels:
+    helm.sh/chart: gophprofile-0.1.0
+    app.kubernetes.io/name: gophprofile
+    app.kubernetes.io/instance: gophprofile
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gophprofile
+    app.kubernetes.io/component: minio-init
+  annotations:
+    # Аналог контейнера minio-init из docker-compose. Бакет обязателен:
+    # проверка здоровья приложения делает BucketExists, и без бакета
+    # /health отдавал бы 503 бесконечно.
+    # Вес 1 — после джобы миграций.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: gophprofile-0.1.0
+        app.kubernetes.io/name: gophprofile
+        app.kubernetes.io/instance: gophprofile
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: gophprofile
+        app.kubernetes.io/component: minio-init
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: mc
+          image: quay.io/minio/mc:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              until mc alias set local http://gophprofile-minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                echo "ждём MinIO..."
+                sleep 3
+              done
+              mc mb --ignore-existing local/avatars
+              mc anonymous set download local/avatars
+              echo "бакет avatars готов"
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: gophprofile-secrets
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gophprofile-secrets
+                  key: MINIO_ROOT_PASSWORD
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+              cpu: 250m
+

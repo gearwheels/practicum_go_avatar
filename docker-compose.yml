@@ -40,7 +40,9 @@ services:
       - avatar-network
 
   minio:
-    image: minio/minio:latest
+    # quay.io, а не Docker Hub: репозиторий minio/minio больше не
+    # отдаётся анонимно (pull access denied на чистой машине).
+    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
     container_name: avatar-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -65,7 +67,7 @@ services:
 
   # Одноразовый контейнер: создаёт бакет для аватарок при первом запуске
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: avatar-minio-init
     depends_on:
       minio:

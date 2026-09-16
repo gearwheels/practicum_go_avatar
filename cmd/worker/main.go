@@ -104,7 +104,7 @@ func main() {
 	// забирать — поднимаем минимальный HTTP-сервер только под /metrics.
 	metricsServer := &http.Server{
 		Addr:              ":" + cfg.MetricsPort,
-		Handler:           metricsMux(),
+		Handler:           metricsMux(amqpConn),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -148,8 +148,30 @@ func main() {
 	wg.Wait()
 }
 
-func metricsMux() *http.ServeMux {
+// metricsMux собирает служебный HTTP-обработчик воркера: метрики Prometheus
+// и пробы для Kubernetes.
+//
+// Проба здесь особенно важна: если консьюмеры завершатся (например, после
+// перезапуска RabbitMQ канал закрывается и Consume возвращает управление),
+// процесс продолжит жить, отдавая 200 на /metrics, но не будет обрабатывать
+// ни одного сообщения. Проверка состояния соединения ловит такого «зомби», и
+// kubelet перезапускает под.
+func metricsMux(amqpConn *amqp.Connection) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", observability.Handler())
+
+	health := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if amqpConn == nil || amqpConn.IsClosed() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"down","reason":"amqp connection is closed"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}
+
+	mux.HandleFunc("/healthz", health)
+	mux.HandleFunc("/livez", health)
 	return mux
 }

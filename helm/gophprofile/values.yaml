@@ -1,0 +1,248 @@
+# Значения по умолчанию для чарта GophProfile.
+# Рассчитаны на локальный кластер (kind): инфраструктура поднимается внутри
+# кластера, образ берётся локальный. Для продакшена см. values-prod.yaml.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: gophprofile
+  tag: local
+  # IfNotPresent — образ загружается в kind через `kind load docker-image`,
+  # тянуть его из реестра не нужно и негде.
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# --- HTTP API ---
+server:
+  replicaCount: 2
+
+  containerPort: 8080
+
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+  # Запас над временем корректного завершения: сервер даёт до 10с на дренаж
+  # HTTP и до 5с на досылку трейсов (см. cmd/server/main.go).
+  terminationGracePeriodSeconds: 45
+
+  # Пауза перед остановкой: за это время kube-proxy на всех узлах успевает
+  # убрать под из endpoints, и клиенты не попадают в закрывающийся под.
+  preStopSleepSeconds: 5
+
+  probes:
+    # Готовность проверяет зависимости (/health отдаёт 503, если БД, S3 или
+    # брокер недоступны) — под просто выводится из балансировки.
+    readiness:
+      path: /health
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    # Жизнеспособность НЕ должна зависеть от внешних сервисов, иначе кратковременная
+    # недоступность Postgres перезапустит разом все реплики. /livez проверяет
+    # только невосстановимое состояние процесса.
+    liveness:
+      path: /livez
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      timeoutSeconds: 3
+      failureThreshold: 3
+    # Стартовая проба даёт время на подключение к зависимостям и не даёт
+    # liveness убить под во время долгого старта.
+    startup:
+      path: /livez
+      periodSeconds: 5
+      failureThreshold: 30
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+# --- Фоновый обработчик ---
+worker:
+  replicaCount: 2
+
+  metricsPort: 9091
+
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+  # Больше, чем у сервера: воркер может держать в обработке сообщение
+  # (скачивание оригинала, генерация миниатюр).
+  terminationGracePeriodSeconds: 60
+
+  probes:
+    readiness:
+      path: /healthz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    liveness:
+      path: /livez
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+# --- Конфигурация приложения (попадает в ConfigMap) ---
+config:
+  logLevel: info
+  minioBucket: avatars
+  minioUseSSL: "false"
+  # Пусто = трейсинг выключен. Для отправки трейсов в Jaeger укажите
+  # адрес OTLP-коллектора, например jaeger-collector.observability:4317
+  otlpEndpoint: ""
+  # Миграции в Kubernetes накатывает Job-хук, а не поды сервера.
+  runMigrations: "false"
+
+# --- Секреты ---
+# Значения по умолчанию годятся только для локального стенда.
+# В продакшене используйте существующий Secret (existingSecret) или
+# внешний менеджер секретов.
+secrets:
+  existingSecret: ""
+  postgresUser: avatar
+  postgresPassword: avatar
+  postgresDatabase: avatar_service
+  rabbitmqUser: guest
+  rabbitmqPassword: guest
+  minioUser: minioadmin
+  minioPassword: minioadmin
+  # Если инфраструктура внешняя (infra.*.enabled=false), задайте DSN целиком.
+  databaseUrl: ""
+  rabbitmqUrl: ""
+
+# --- Ingress ---
+ingress:
+  enabled: true
+  className: nginx
+  host: avatars.local
+  path: /
+  pathType: Prefix
+  annotations:
+    # Без этого nginx режет тело запроса на 1MB, а сервис принимает файлы до 10MB.
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+  tls: []
+
+# --- Мониторинг ---
+# Требует установленных CRD Prometheus Operator.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# --- Безопасность ---
+serviceAccount:
+  create: true
+  name: ""
+  # Приложению не нужен доступ к API Kubernetes — токен не монтируем.
+  automountServiceAccountToken: false
+
+rbac:
+  create: true
+
+networkPolicy:
+  enabled: true
+  # Метки namespace, из которого разрешён вход трафика к серверу.
+  ingressNamespaceSelector:
+    kubernetes.io/metadata.name: ingress-nginx
+  # Метки namespace, откуда Prometheus скрейпит метрики.
+  monitoringNamespaceSelector:
+    kubernetes.io/metadata.name: monitoring
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 10001
+  capabilities:
+    drop:
+      - ALL
+
+# --- Инфраструктура в кластере ---
+# Для локального стенда — включена. В продакшене выключается, а адреса
+# managed-сервисов передаются через secrets.databaseUrl / rabbitmqUrl.
+infra:
+  postgres:
+    enabled: true
+    image: postgres:16-alpine
+    storage: 1Gi
+    storageClass: ""
+    resources:
+      requests:
+        memory: 128Mi
+        cpu: 100m
+      limits:
+        memory: 512Mi
+        cpu: 500m
+
+  rabbitmq:
+    enabled: true
+    image: rabbitmq:3.13-management-alpine
+    storage: 1Gi
+    storageClass: ""
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+      limits:
+        memory: 768Mi
+        cpu: 500m
+
+  minio:
+    enabled: true
+    # Образы берутся с quay.io: на Docker Hub репозитории minio/minio и
+    # minio/mc больше не отдаются анонимно (pull access denied).
+    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
+    # Образ клиента mc для Job, создающего бакет
+    mcImage: quay.io/minio/mc:latest
+    storage: 2Gi
+    storageClass: ""
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+      limits:
+        memory: 768Mi
+        cpu: 500m

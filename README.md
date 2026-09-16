@@ -28,7 +28,11 @@
 │   └── static/         # Статические файлы (HTML, CSS, JS)
 ├── migrations/         # Миграции базы данных
 ├── docker/             # Docker-файлы и конфигурации
-├── k8s/                # Манифесты Kubernetes
+├── helm/               # Helm Chart (основной способ деплоя)
+├── k8s/                # Манифесты Kubernetes (генерируются из чарта)
+├── kind/               # Конфигурация локального кластера kind
+├── monitoring/         # Конфигурация Prometheus/Grafana/Loki/Promtail
+├── scripts/            # Вспомогательные скрипты
 ├── tests/              # Интеграционные и e2e тесты
 ├── docs/               # Документация проекта
 └── .gitignore          # Файл для исключения файлов из Git
@@ -39,7 +43,12 @@
 Подробное техническое задание находится в файлах
 [docs/technical-specification.md](docs/technical-specification.md) (спринт 1 — MVP) и
 [docs/technical-specification-sprint2.md](docs/technical-specification-sprint2.md)
-(спринт 2 — наблюдаемость).
+(спринт 2 — наблюдаемость) и
+[docs/technical-specification-sprint3.md](docs/technical-specification-sprint3.md)
+(спринт 3 — Kubernetes и Helm).
+
+Схема архитектуры, включая компоненты Kubernetes, —
+[docs/architecture.md](docs/architecture.md).
 
 ## Как начать работу
 
@@ -58,7 +67,10 @@
     ```
 
 4.  **Настройте окружение:**
-    Создайте файл `.env` на основе `.env.example` (необходимо будет его создать) и укажите необходимые переменные окружения (данные для подключения к БД, S3 и т.д.).
+    ```bash
+    cp .env.example .env
+    ```
+    При необходимости поменяйте значения (подключение к БД, S3, брокеру).
 
 5.  **Запустите сервисы с помощью Docker Compose:**
     ```bash
@@ -98,6 +110,101 @@ Grafana открывается без логина (анонимный дост�
 
 Трейсинг можно отключить, оставив `OTEL_EXPORTER_OTLP_ENDPOINT` пустым —
 сервис продолжит работать без Jaeger.
+
+## Деплой в Kubernetes
+
+Основной способ развёртывания — Helm Chart в [helm/gophprofile](helm/gophprofile).
+В каталоге [k8s/](k8s) лежат те же ресурсы обычными манифестами — они
+генерируются из чарта (`./scripts/render-k8s.sh`) для тех, кто применяет
+конфигурацию через `kubectl apply` без Helm. Редактировать `k8s/` вручную не
+нужно: изменения потеряются при следующем рендере.
+
+### Локальный кластер (kind)
+
+Потребуются `docker`, `kubectl`, `helm` и `kind`.
+
+```bash
+# 1. Кластер с проброшенными портами 80/443 для Ingress
+kind create cluster --config kind/cluster.yaml
+
+# 2. Ingress-контроллер и metrics-server (нужен для HPA)
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.12.0/deploy/static/provider/kind/deploy.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+# В kind у kubelet самоподписанный сертификат:
+kubectl patch deployment metrics-server -n kube-system --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+
+# 3. Собрать образ и загрузить его в кластер
+docker build -f docker/Dockerfile -t gophprofile:local .
+kind load docker-image gophprofile:local --name gophprofile
+
+# 4. Установить чарт
+helm install gophprofile helm/gophprofile \
+  -f helm/gophprofile/values-dev.yaml \
+  -n gophprofile --create-namespace
+```
+
+Проверка:
+
+```bash
+kubectl get pods -n gophprofile
+curl -H "Host: avatars.local" http://localhost/health
+```
+
+Имя `avatars.local` можно добавить в hosts-файл (`127.0.0.1 avatars.local`) —
+тогда сервис откроется в браузере напрямую.
+
+### Что разворачивается
+
+| Ресурс | Назначение |
+|---|---|
+| Deployment `server` | HTTP API и веб-интерфейс, автомасштабирование через HPA |
+| Deployment `worker` | Фоновая генерация миниатюр и очистка S3 |
+| StatefulSet `postgres` / `rabbitmq` / `minio` | Инфраструктура для стенда (в проде выключается) |
+| Job (Helm hook) | Миграции БД и создание бакета |
+| Ingress, Service | Маршрутизация трафика |
+| ConfigMap, Secret | Конфигурация и учётные данные |
+| HPA, PodDisruptionBudget | Масштабирование и устойчивость при обслуживании узлов |
+| NetworkPolicy, RBAC, SecurityContext | Ограничение сети и прав |
+| ServiceMonitor | Автообнаружение подов Prometheus (нужны CRD Prometheus Operator) |
+
+### Окружения
+
+| Файл | Для чего |
+|---|---|
+| `values.yaml` | База: инфраструктура в кластере, локальный образ |
+| `values-dev.yaml` | Локальный kind: меньше ресурсов, debug-логи |
+| `values-prod.yaml` | Продакшен: внешние managed-сервисы, TLS, `existingSecret`, образ из реестра |
+
+```bash
+# Продакшен-выкат (Secret с учётными данными создаётся вне чарта)
+helm upgrade --install gophprofile helm/gophprofile \
+  -f helm/gophprofile/values-prod.yaml \
+  --set image.tag=1.0.0 --set ingress.host=avatars.example.com \
+  -n gophprofile
+```
+
+### Полезные команды
+
+```bash
+kubectl get hpa -n gophprofile                      # автомасштабирование
+kubectl logs -n gophprofile job/gophprofile-migrate  # результат миграций
+helm history gophprofile -n gophprofile              # история релизов
+helm rollback gophprofile -n gophprofile             # откат
+```
+
+### Особенности стенда
+
+- **Стек наблюдаемости остаётся в docker-compose.** В кластер выносится
+  приложение и его инфраструктура; для метрик в K8s чарт отдаёт
+  `ServiceMonitor` — включите `serviceMonitor.enabled=true`, если в кластере
+  установлен Prometheus Operator.
+- **NetworkPolicy применяет CNI.** Манифесты корректны и принимаются любым
+  кластером, но фактическая изоляция зависит от того, поддерживает ли ваш CNI
+  сетевые политики.
+- **Миграции выполняет Helm-хук**, поды сервера стартуют с
+  `RUN_MIGRATIONS=false`. Это нужно, чтобы несколько реплик не применяли схему
+  наперегонки.
 
 ## Веб-интерфейс
 

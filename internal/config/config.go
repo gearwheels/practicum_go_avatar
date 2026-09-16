@@ -27,6 +27,12 @@ type Config struct {
 	OTLPEndpoint string
 	MetricsPort  string
 	LogLevel     string
+
+	// RunMigrations включает прогон миграций при старте сервера. По
+	// умолчанию true — так работает docker-compose с одним экземпляром.
+	// В Kubernetes выключается: там миграции накатывает отдельный Job
+	// (Helm-хук), иначе несколько реплик стартуют наперегонки.
+	RunMigrations bool
 }
 
 // Load читает конфигурацию из переменных окружения. Возвращает ошибку, если
@@ -41,9 +47,14 @@ func Load() (Config, error) {
 		MinioPassword: os.Getenv("MINIO_ROOT_PASSWORD"),
 		MinioUseSSL:   getEnv("MINIO_USE_SSL", "false") == "true",
 		MinioBucket:   getEnv("MINIO_BUCKET", "avatars"),
-		OTLPEndpoint:  getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "jaeger:4317"),
+		// Без fallback: пустое значение должно выключать трейсинг. С
+		// getEnv("...", "jaeger:4317") пустая строка означала бы «не задано»,
+		// и сервис в кластере без Jaeger бесконечно ломился бы по этому
+		// адресу, а при остановке писал ошибку экспорта.
+		OTLPEndpoint:  os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		MetricsPort:   getEnv("METRICS_PORT", "9091"),
 		LogLevel:      getEnv("LOG_LEVEL", "info"),
+		RunMigrations: getEnv("RUN_MIGRATIONS", "true") != "false",
 	}
 
 	var missing []string

@@ -1,0 +1,63 @@
+# Локальная разработка в kind.
+# helm install gophprofile helm/gophprofile -f helm/gophprofile/values-dev.yaml
+
+image:
+  tag: local
+  pullPolicy: Never # образ загружается через `kind load docker-image`
+
+server:
+  replicaCount: 2
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 300m
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+
+worker:
+  replicaCount: 1
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 300m
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+
+config:
+  logLevel: debug
+  # Трейсинг выключен: Jaeger живёт в docker-compose, а не в кластере.
+  otlpEndpoint: ""
+
+ingress:
+  enabled: true
+  host: avatars.local
+
+# В kind нет Prometheus Operator по умолчанию — включайте после установки CRD.
+serviceMonitor:
+  enabled: false
+
+# Политики оставлены включёнными, чтобы манифесты проверялись кластером,
+# но kindnet их не применяет — фактической изоляции на этом стенде нет.
+networkPolicy:
+  enabled: true
+
+infra:
+  postgres:
+    enabled: true
+    storage: 1Gi
+  rabbitmq:
+    enabled: true
+    storage: 1Gi
+  minio:
+    enabled: true
+    storage: 2Gi

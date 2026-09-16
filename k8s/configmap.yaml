@@ -1,0 +1,31 @@
+# СГЕНЕРИРОВАНО автоматически из helm/gophprofile — не редактируйте вручную.
+# Обновить: ./scripts/render-k8s.sh
+#
+# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения
+# используйте Helm напрямую с нужным values-файлом.
+---
+# Source: gophprofile/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gophprofile-config
+  labels:
+    helm.sh/chart: gophprofile-0.1.0
+    app.kubernetes.io/name: gophprofile
+    app.kubernetes.io/instance: gophprofile
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gophprofile
+data:
+  # Несекретная конфигурация приложения. Учётные данные — в Secret.
+  SERVER_PORT: "8080"
+  METRICS_PORT: "9091"
+  LOG_LEVEL: "info"
+  MINIO_ENDPOINT: "gophprofile-minio:9000"
+  MINIO_BUCKET: "avatars"
+  MINIO_USE_SSL: "false"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  # Миграции накатывает Job-хук (см. job-migrate.yaml), поэтому поды сервера
+  # их не запускают — иначе реплики стартовали бы наперегонки.
+  RUN_MIGRATIONS: "false"
+
