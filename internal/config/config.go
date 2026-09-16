@@ -21,6 +21,12 @@ type Config struct {
 	MinioPassword string
 	MinioUseSSL   bool
 	MinioBucket   string
+
+	// Наблюдаемость. Все поля опциональны: с пустым OTLPEndpoint трейсинг
+	// просто выключается, и сервис работает без Jaeger.
+	OTLPEndpoint string
+	MetricsPort  string
+	LogLevel     string
 }
 
 // Load читает конфигурацию из переменных окружения. Возвращает ошибку, если
@@ -35,6 +41,9 @@ func Load() (Config, error) {
 		MinioPassword: os.Getenv("MINIO_ROOT_PASSWORD"),
 		MinioUseSSL:   getEnv("MINIO_USE_SSL", "false") == "true",
 		MinioBucket:   getEnv("MINIO_BUCKET", "avatars"),
+		OTLPEndpoint:  getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "jaeger:4317"),
+		MetricsPort:   getEnv("METRICS_PORT", "9091"),
+		LogLevel:      getEnv("LOG_LEVEL", "info"),
 	}
 
 	var missing []string

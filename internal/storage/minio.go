@@ -5,9 +5,11 @@ package storage
 import (
 	"context"
 	"io"
+	"net/http"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Storage — интерфейс доступа к объектному хранилищу.
@@ -27,10 +29,14 @@ type MinioStorage struct {
 
 // NewMinioStorage создаёт клиента MinIO для заданного бакета. Сам бакет
 // должен быть создан заранее (см. сервис minio-init в docker-compose.yml).
+//
+// HTTP-транспорт обёрнут otelhttp: каждая операция с S3 попадает в трейс
+// отдельным клиентским спаном без ручной разметки в методах ниже.
 func NewMinioStorage(endpoint, accessKey, secretKey string, useSSL bool, bucket string) (*MinioStorage, error) {
 	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure: useSSL,
+		Creds:     credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure:    useSSL,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
 	})
 	if err != nil {
 		return nil, err
