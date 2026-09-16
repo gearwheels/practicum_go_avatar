@@ -9,9 +9,9 @@
 # ходить только в свою инфраструктуру и в DNS, а принимать трафик — только
 # от ingress-контроллера и системы мониторинга.
 #
-# Внимание: политики применяет CNI. Дефолтный kindnet в kind их НЕ
-# обеспечивает — манифесты будут приняты кластером, но фактической изоляции
-# на локальном стенде не будет (нужен, например, Calico).
+# Политики применяет CNI: kindnet в kind >= 0.24 их поддерживает, в
+# продакшене — Calico, Cilium и т.п. CNI без поддержки NetworkPolicy
+# принимает манифесты, но трафик не изолирует.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -242,5 +242,13 @@ spec:
             matchLabels:
               app.kubernetes.io/name: gophprofile
               app.kubernetes.io/instance: gophprofile
+    # Скрейп метрик RabbitMQ (плагин rabbitmq_prometheus).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 15692
 
 

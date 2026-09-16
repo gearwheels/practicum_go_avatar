@@ -41,8 +41,8 @@ spec:
       annotations:
         # Пересоздать поды при изменении конфигурации или секретов —
         # иначе они продолжат работать со старыми значениями.
-        checksum/config: f0c593122893dce863e268ce065b0b79baa8ca7a84d2118550971bd349865193
-        checksum/secret: cd472bb0be5dd01019df1e9ce23b04fab3a7e262bb1fd42e463f0881c4718cf2
+        checksum/config: dc000e6cf30743d66c7cb55a05825f081dc661f343ffa9b35bca2b8150b29943
+        checksum/secret: 24e9d919f5c74428aec143807b41973e35c29bd027865ea1ce409db6d5c98764
     spec:
       serviceAccountName: gophprofile
       automountServiceAccountToken: false
@@ -89,7 +89,7 @@ spec:
           # пока зависимости недоступны, и возвращается сам после их починки.
           readinessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10

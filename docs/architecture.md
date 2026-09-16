@@ -10,8 +10,9 @@ flowchart TB
     client([Клиент<br/>браузер / стороннее приложение])
 
     subgraph app["Приложение"]
-        server["server<br/>HTTP API + веб-интерфейс"]
+        server["server<br/>rate limiter → HTTP API + веб-интерфейс"]
         worker["worker<br/>фоновая обработка"]
+        cb["circuit breaker<br/>postgres / s3 / rabbitmq<br/>(internal/resilience)"]
     end
 
     subgraph infra["Инфраструктура"]
@@ -38,6 +39,9 @@ flowchart TB
     worker -->|"6 загрузить миниатюры<br/>100x100, 300x300"| s3
     worker -->|"7 статус completed"| pg
 
+    server -.-|"все обращения к зависимостям"| cb
+    worker -.-|"все обращения к зависимостям"| cb
+
     server -.->|"/metrics"| prom
     worker -.->|"/metrics"| prom
     server -.->|"OTLP"| jaeger
@@ -53,6 +57,10 @@ flowchart TB
 создаются асинхронно. Трейс при этом не обрывается — `traceparent`
 передаётся в заголовках AMQP, поэтому шаги 1–7 видны одним трейсом.
 
+Сервисный слой не знает о circuit breaker: брейкеры подключены декораторами
+к интерфейсам репозитория, хранилища и публикатора в `cmd/server` и
+`cmd/worker`. HTTP-слой переводит `resilience.ErrCircuitOpen` в `503`.
+
 ## Развёртывание в Kubernetes
 
 ```mermaid
@@ -60,14 +68,21 @@ flowchart TB
     user([Пользователь])
 
     subgraph cluster["Кластер Kubernetes"]
-        ingress["Ingress<br/>avatars.example.com<br/>proxy-body-size: 10m"]
+        ingress["Ingress<br/>avatars.example.com<br/>proxy-body-size: 10m<br/>limit-rps по IP"]
+
+        subgraph mon["namespace monitoring (kube-prometheus-stack)"]
+            prometheus["Prometheus<br/>Operator"]
+            alertmanager["Alertmanager"]
+            grafanaK8s["Grafana<br/>sidecar дашбордов"]
+            ksm["kube-state-metrics<br/>node-exporter"]
+        end
 
         subgraph ns["namespace gophprofile"]
             svcServer["Service<br/>server:80"]
             svcWorker["Service<br/>worker:9091"]
 
-            deployServer["Deployment server<br/>реплики 3<br/>readiness /health<br/>liveness /livez"]
-            deployWorker["Deployment worker<br/>readiness /healthz<br/>liveness /livez"]
+            deployServer["Deployment server<br/>реплики 3<br/>readiness/liveness /livez<br/>rate limit + circuit breaker"]
+            deployWorker["Deployment worker<br/>readiness/liveness /livez<br/>circuit breaker"]
 
             hpaServer["HPA server<br/>CPU 70% / RAM 80%<br/>2-10 реплик"]
             hpaWorker["HPA worker<br/>1-6 реплик"]
@@ -84,7 +99,9 @@ flowchart TB
 
             netpol["NetworkPolicy<br/>default-deny + разрешения"]
             sa["ServiceAccount<br/>токен не монтируется<br/>Role: read-only configmap"]
-            sm["ServiceMonitor<br/>обнаружение подов Prometheus"]
+            sm["ServiceMonitor<br/>server, worker, rabbitmq"]
+            rules["PrometheusRule<br/>10 алертов"]
+            dash["ConfigMap grafana_dashboard<br/>приложение + кластер"]
         end
     end
 
@@ -114,6 +131,12 @@ flowchart TB
     sa -.-> deployServer
     sm -.->|скрейп /metrics| svcServer
     sm -.-> svcWorker
+    prometheus -.->|читает| sm
+    prometheus -.->|читает| rules
+    prometheus -.-> ksm
+    prometheus -->|алерты| alertmanager
+    grafanaK8s -.->|загружает| dash
+    grafanaK8s --> prometheus
 ```
 
 ### Почему сделано именно так
@@ -131,15 +154,31 @@ flowchart TB
 используется `pre-upgrade` — там база уже существует, и схема должна
 обновиться до выката новых подов.
 
-**Разные эндпоинты для readiness и liveness.** `/health` проверяет БД, S3 и
-брокер и отдаёт 503, если хоть что-то недоступно, — это правильная семантика
-для readiness: под выводится из балансировки и возвращается сам, когда
-зависимости починятся. Ставить такую проверку в liveness опасно: при
-кратковременной недоступности Postgres kubelet перезапустил бы разом все
-реплики, добив систему, которой и так плохо. Поэтому liveness смотрит на
-`/livez`, который не делает сетевых вызовов и реагирует только на
-невосстановимое состояние процесса — закрытое AMQP-соединение (оно
-устанавливается один раз и не переподключается).
+**Пробы не зависят от внешних сервисов.** `/health` проверяет БД, S3 и брокер
+и отдаёт 503, если хоть что-то недоступно. Для пробы Kubernetes это ловушка:
+зависимости общие для всех реплик, поэтому при отказе S3 проба разом упала
+бы у всех подов. В liveness это означало бы перезапуск всех реплик, в
+readiness — вывод всех подов из балансировки, и nginx отвечал бы 503 даже на
+запросы, которым S3 не нужен. Это проверено на стенде: до исправления
+остановка MinIO делала сервис полностью недоступным.
+
+Поэтому обе пробы смотрят на `/livez`. Он не делает сетевых вызовов и
+реагирует только на невосстановимое состояние процесса: закрытое
+AMQP-соединение, которое устанавливается один раз и не переподключается.
+Отказ зависимости обрабатывает приложение. Circuit breaker быстро отвечает
+503 только на затронутые операции, остальное работает. Сам `/health`
+используется для диагностики и мониторинга.
+
+**Rate limiting в два рубежа.** Лимит в приложении считается по `X-User-ID`,
+чтобы пользователи за одним NAT не мешали друг другу. Но заголовок задаёт
+клиент, и от флуда со сменой `X-User-ID` такой лимит не защищает. Поэтому
+ingress-nginx дополнительно ограничивает частоту по IP ещё до подов.
+
+**ServiceMonitor и PrometheusRule с меткой `release`.** Стандартная установка
+kube-prometheus-stack выбирает ресурсы по метке `release=<имя релиза>`, а без
+неё молча их игнорирует. Шаблоны также проверяют наличие CRD
+(`.Capabilities.APIVersions`), поэтому чарт ставится и в кластер без
+Prometheus Operator.
 
 **У воркера тоже есть пробы.** Без них он мог бы стать «зомби»: если
 консьюмеры завершатся после перезапуска RabbitMQ, процесс продолжит жить и

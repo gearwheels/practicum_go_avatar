@@ -27,7 +27,7 @@ var (
 func newTestEcho() *echo.Echo {
 	testEchoOnce.Do(func() {
 		testEcho = echo.New()
-		useMiddleware(testEcho)
+		useMiddleware(testEcho, 0, 0) // лимит выключен: тест проверяет Recover, а не 429
 		testEcho.GET("/panic", func(echo.Context) error {
 			panic("паника в обработчике")
 		})

@@ -37,10 +37,14 @@ server:
   preStopSleepSeconds: 5
 
   probes:
-    # Готовность проверяет зависимости (/health отдаёт 503, если БД, S3 или
-    # брокер недоступны) — под просто выводится из балансировки.
+    # Готовность НЕ проверяет внешние зависимости. БД, S3 и брокер общие для
+    # всех реплик: если бы readiness смотрела на /health, отказ одного S3
+    # разом вывел бы из балансировки все поды, и сервис отдавал бы 503 от
+    # nginx на всё, включая то, что без S3 работает (метаданные, списки).
+    # Отказ зависимостей обрабатывает circuit breaker (быстрые 503 только на
+    # затронутых операциях), а /health остаётся для мониторинга и алертов.
     readiness:
-      path: /health
+      path: /livez
       initialDelaySeconds: 5
       periodSeconds: 10
       timeoutSeconds: 3
@@ -91,8 +95,10 @@ worker:
   terminationGracePeriodSeconds: 60
 
   probes:
+    # Как и у сервера, без зависимостей: неготовый под выпадает из endpoints,
+    # и Prometheus перестал бы снимать с него метрики ровно во время аварии.
     readiness:
-      path: /healthz
+      path: /livez
       initialDelaySeconds: 5
       periodSeconds: 10
       timeoutSeconds: 3
@@ -125,6 +131,15 @@ config:
   otlpEndpoint: ""
   # Миграции в Kubernetes накатывает Job-хук, а не поды сервера.
   runMigrations: "false"
+  # Ограничение частоты запросов в каждом поде сервера: на пользователя
+  # (X-User-ID), без заголовка — на IP. 0 выключает лимит.
+  rateLimitRPS: "20"
+  rateLimitBurst: "40"
+  # Circuit breaker для Postgres, S3 и RabbitMQ: после стольких отказов
+  # подряд обращения к зависимости не выполняются и сразу получают 503, а
+  # через openTimeout пропускается пробный запрос.
+  circuitBreakerFailureThreshold: "5"
+  circuitBreakerOpenTimeout: 30s
 
 # --- Секреты ---
 # Значения по умолчанию годятся только для локального стенда.
@@ -154,15 +169,41 @@ ingress:
     # Без этого nginx режет тело запроса на 1MB, а сервис принимает файлы до 10MB.
     nginx.ingress.kubernetes.io/proxy-body-size: 10m
     nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    # Первый рубеж rate limiting — по IP клиента, ещё до подов. Защищает от
+    # флуда, который обходит лимит приложения сменой X-User-ID.
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
   tls: []
 
 # --- Мониторинг ---
-# Требует установленных CRD Prometheus Operator.
+# ServiceMonitor и PrometheusRule — ресурсы Prometheus Operator. Если его CRD
+# в кластере нет, шаблоны пропускаются, а не ломают установку.
+# Стек мониторинга для kind: monitoring/k8s/install.sh.
 serviceMonitor:
-  enabled: false
+  enabled: true
   interval: 30s
   scrapeTimeout: 10s
-  labels: {}
+  # Стандартный kube-prometheus-stack берёт только ресурсы с меткой release,
+  # равной имени его релиза. Без неё ServiceMonitor молча игнорируется.
+  labels:
+    release: kube-prometheus-stack
+  # Скрейп встроенного RabbitMQ (глубина очередей на дашборде).
+  rabbitmq: true
+
+alerts:
+  enabled: true
+  labels:
+    release: kube-prometheus-stack
+  # Пороги правил (см. templates/prometheusrule.yaml).
+  errorRatePercent: 5
+  latencyP95Seconds: 1
+  rateLimitRejectionsPerSecond: 1
+
+# Дашборды Grafana в ConfigMap: sidecar Grafana подхватывает их по метке.
+grafanaDashboards:
+  enabled: true
+  label: grafana_dashboard
+  labelValue: "1"
 
 # --- Безопасность ---
 serviceAccount:
@@ -182,6 +223,9 @@ networkPolicy:
   # Метки namespace, откуда Prometheus скрейпит метрики.
   monitoringNamespaceSelector:
     kubernetes.io/metadata.name: monitoring
+  # Дополнительные разрешения исходящего трафика — например, к managed
+  # Postgres/S3 вне кластера или к OTLP-коллектору (см. values-prod.yaml).
+  extraEgress: []
 
 podSecurityContext:
   runAsNonRoot: true

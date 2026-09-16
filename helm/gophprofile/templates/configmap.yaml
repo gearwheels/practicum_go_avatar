@@ -16,3 +16,7 @@ data:
   # Миграции накатывает Job-хук (см. job-migrate.yaml), поэтому поды сервера
   # их не запускают — иначе реплики стартовали бы наперегонки.
   RUN_MIGRATIONS: {{ .Values.config.runMigrations | quote }}
+  RATE_LIMIT_RPS: {{ .Values.config.rateLimitRPS | quote }}
+  RATE_LIMIT_BURST: {{ .Values.config.rateLimitBurst | quote }}
+  CIRCUIT_BREAKER_FAILURE_THRESHOLD: {{ .Values.config.circuitBreakerFailureThreshold | quote }}
+  CIRCUIT_BREAKER_OPEN_TIMEOUT: {{ .Values.config.circuitBreakerOpenTimeout | quote }}

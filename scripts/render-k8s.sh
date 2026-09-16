@@ -17,6 +17,10 @@ NAMESPACE="gophprofile"
 
 command -v helm >/dev/null 2>&1 || { echo "helm не найден в PATH" >&2; exit 1; }
 
+# Дашборд приложения — один на docker-compose и Kubernetes. Helm читает
+# только файлы внутри чарта, поэтому держим в чарте копию.
+cp monitoring/grafana/dashboards/avatar-service.json "$CHART_DIR/dashboards/avatar-service.json"
+
 rm -rf "${OUT_DIR:?}"/*.yaml
 mkdir -p "$OUT_DIR"
 
@@ -24,9 +28,13 @@ echo "Рендерю $CHART_DIR -> $OUT_DIR ..."
 
 # --output-dir раскладывает ресурсы по отдельным файлам, повторяя структуру
 # templates/ — так манифесты удобнее читать и применять выборочно.
+# --api-versions: helm template не видит кластер, а ServiceMonitor и
+# PrometheusRule рендерятся только при наличии CRD Prometheus Operator.
 helm template "$RELEASE" "$CHART_DIR" \
   --namespace "$NAMESPACE" \
   --values "$CHART_DIR/values.yaml" \
+  --api-versions monitoring.coreos.com/v1/ServiceMonitor \
+  --api-versions monitoring.coreos.com/v1/PrometheusRule \
   --output-dir "$OUT_DIR.tmp" >/dev/null
 
 # Переносим из вложенной структуры (<chart>/templates/*.yaml) в плоский k8s/

@@ -42,12 +42,16 @@ ingress:
   enabled: true
   host: avatars.local
 
-# В kind нет Prometheus Operator по умолчанию — включайте после установки CRD.
+# ServiceMonitor, алерты и дашборды: стек мониторинга ставится скриптом
+# monitoring/k8s/install.sh. Без него ресурсы Prometheus Operator просто
+# не создаются.
 serviceMonitor:
-  enabled: false
+  enabled: true
 
-# Политики оставлены включёнными, чтобы манифесты проверялись кластером,
-# но kindnet их не применяет — фактической изоляции на этом стенде нет.
+alerts:
+  enabled: true
+
+# kindnet (kind >= 0.24) применяет NetworkPolicy — изоляция на стенде реальная.
 networkPolicy:
   enabled: true
 

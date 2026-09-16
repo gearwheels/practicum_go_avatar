@@ -12,6 +12,7 @@ import (
 
 	"go-avatar-service/internal/domain"
 	"go-avatar-service/internal/repository"
+	"go-avatar-service/internal/resilience"
 	"go-avatar-service/internal/services/avatar"
 	"go-avatar-service/internal/webui"
 )
@@ -80,6 +81,9 @@ func (s *AvatarServer) UploadAvatar(ctx context.Context, request UploadAvatarReq
 
 	a, err := s.avatars.Upload(ctx, request.Params.XUserID, file.FileName, file.MimeType, int64(len(file.Data)), bytes.NewReader(file.Data))
 	if err != nil {
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return UploadAvatar503JSONResponse{unavailable(err)}, nil
+		}
 		return UploadAvatar500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
 	}
 
@@ -105,6 +109,9 @@ func (s *AvatarServer) GetAvatarById(ctx context.Context, request GetAvatarByIdR
 		return GetAvatarById404JSONResponse{NotFoundJSONResponse{Error: "Avatar not found"}}, nil
 	}
 	if err != nil {
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return GetAvatarById503JSONResponse{unavailable(err)}, nil
+		}
 		return GetAvatarById500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
 	}
 
@@ -117,6 +124,9 @@ func (s *AvatarServer) GetAvatarMetadata(ctx context.Context, request GetAvatarM
 		return GetAvatarMetadata404JSONResponse{NotFoundJSONResponse{Error: "Avatar not found"}}, nil
 	}
 	if err != nil {
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return GetAvatarMetadata503JSONResponse{unavailable(err)}, nil
+		}
 		return GetAvatarMetadata500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
 	}
 
@@ -140,6 +150,9 @@ func (s *AvatarServer) GetUserAvatar(ctx context.Context, request GetUserAvatarR
 		}, nil
 	}
 	if err != nil {
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return GetUserAvatar503JSONResponse{unavailable(err)}, nil
+		}
 		return GetUserAvatar500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
 	}
 
@@ -164,6 +177,9 @@ func (s *AvatarServer) ListUserAvatars(ctx context.Context, request ListUserAvat
 
 	avatars, total, err := s.avatars.ListForUser(ctx, request.UserId, limit, offset)
 	if err != nil {
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return ListUserAvatars503JSONResponse{unavailable(err)}, nil
+		}
 		return ListUserAvatars500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
 	}
 
@@ -191,6 +207,8 @@ func (s *AvatarServer) DeleteAvatarById(ctx context.Context, request DeleteAvata
 		return DeleteAvatarById403JSONResponse{Error: "Forbidden", Details: strPtr("You can only delete your own avatars")}, nil
 	case errors.Is(err, repository.ErrNotFound):
 		return DeleteAvatarById404JSONResponse{NotFoundJSONResponse{Error: "Avatar not found"}}, nil
+	case errors.Is(err, resilience.ErrCircuitOpen):
+		return DeleteAvatarById503JSONResponse{unavailable(err)}, nil
 	default:
 		return DeleteAvatarById500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
 	}
@@ -205,6 +223,8 @@ func (s *AvatarServer) DeleteUserAvatar(ctx context.Context, request DeleteUserA
 		return DeleteUserAvatar403JSONResponse{Error: "Forbidden", Details: strPtr("You can only delete your own avatars")}, nil
 	case errors.Is(err, repository.ErrNotFound):
 		return DeleteUserAvatar404JSONResponse{NotFoundJSONResponse{Error: "Avatar not found"}}, nil
+	case errors.Is(err, resilience.ErrCircuitOpen):
+		return DeleteUserAvatar503JSONResponse{unavailable(err)}, nil
 	default:
 		return DeleteUserAvatar500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
 	}
@@ -297,7 +317,10 @@ func (s *AvatarServer) PostUploadForm(ctx context.Context, request PostUploadFor
 
 	html, err := s.web.HandleUploadForm(ctx, userID, file.FileName, file.MimeType, int64(len(file.Data)), bytes.NewReader(file.Data))
 	if err != nil {
-		return PostUploadForm400JSONResponse{BadRequestJSONResponse{Error: "Upload failed", Details: strPtr(err.Error())}}, nil
+		// Сбой при сохранении — не ошибка клиента, поэтому не 400: ошибка
+		// уходит в общий обработчик Echo, который вернёт 500, а при
+		// разомкнутом circuit breaker — 503.
+		return nil, err
 	}
 
 	return PostUploadForm200TexthtmlResponse{Body: bytes.NewReader(html), ContentLength: int64(len(html))}, nil
@@ -306,6 +329,11 @@ func (s *AvatarServer) PostUploadForm(ctx context.Context, request PostUploadFor
 // ---------- Вспомогательные функции ----------
 
 func strPtr(s string) *string { return &s }
+
+// unavailable формирует тело ответа 503 для разомкнутого circuit breaker.
+func unavailable(err error) ServiceUnavailableJSONResponse {
+	return ServiceUnavailableJSONResponse{Error: "Service temporarily unavailable", Details: strPtr(err.Error())}
+}
 
 func pingComponent(ctx context.Context, checker Pinger) *ComponentStatus {
 	if checker == nil {

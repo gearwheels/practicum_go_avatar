@@ -85,6 +85,10 @@ paths:
               example:
                 error: "File too large"
                 max_size: 10485760
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -137,6 +141,10 @@ paths:
                 format: binary
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -166,6 +174,10 @@ paths:
                 details: "You can only delete your own avatars"
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -185,6 +197,10 @@ paths:
                 $ref: '#/components/schemas/AvatarMetadata'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -237,6 +253,10 @@ paths:
                 format: binary
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -260,6 +280,10 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -308,6 +332,10 @@ paths:
                     example: 0
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -498,6 +526,35 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: >
+        Превышен лимит частоты запросов. Ограничение действует на уровне
+        ingress-контроллера и в каждом экземпляре сервиса (по X-User-ID, а без
+        него — по IP клиента).
+      headers:
+        Retry-After:
+          description: Через сколько секунд можно повторить запрос
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Too many requests"
+            details: "Rate limit exceeded, retry later"
+    ServiceUnavailable:
+      description: >
+        Внешняя зависимость (PostgreSQL, S3 или брокер) временно недоступна:
+        circuit breaker разомкнут, и запрос отклонён сразу, без ожидания
+        таймаута. Повторите запрос позже.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Service temporarily unavailable"
+            details: "storage: circuit breaker is open"
     InternalError:
       description: Внутренняя ошибка сервиса
       content:

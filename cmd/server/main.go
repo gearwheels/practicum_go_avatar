@@ -23,6 +23,7 @@ import (
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/resilience"
 	"go-avatar-service/internal/retryutil"
 	"go-avatar-service/internal/services/avatar"
 	"go-avatar-service/internal/storage"
@@ -30,7 +31,19 @@ import (
 )
 
 // serviceName — под этим именем сервис виден в Jaeger и в логах.
-const serviceName = "avatar-server"
+const (
+	serviceName = "avatar-server"
+
+	// requestTimeout — предел обработки одного запроса. По истечении контекст
+	// отменяется, и зависшие обращения к БД или S3 прерываются, а не держат
+	// соединение до таймаута балансировщика (60с в ingress). Ошибка по
+	// таймауту засчитывается circuit breaker как отказ зависимости.
+	requestTimeout = 30 * time.Second
+	// readHeaderTimeout защищает от клиентов, которые открывают соединение и
+	// бесконечно медленно шлют заголовки (Slowloris).
+	readHeaderTimeout = 10 * time.Second
+	idleTimeout       = 120 * time.Second
+)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -129,8 +142,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	publisher := broker.NewPublisher(amqpChannel)
-	avatarService := avatar.NewService(repo, minioStorage, publisher)
+	// Бизнес-логика работает с зависимостями через circuit breaker: при
+	// отказе базы, S3 или брокера запросы отклоняются сразу (503), а не
+	// висят на таймаутах. Проверки здоровья (pool, minioStorage ниже) и
+	// метрика хранилища идут в обход брейкеров — им нужно реальное
+	// состояние зависимостей.
+	breakers := resilience.NewBreakers(cfg.BreakerFailureThreshold, cfg.BreakerOpenTimeout)
+	avatarService := avatar.NewService(
+		resilience.NewRepository(repo, breakers.Postgres),
+		resilience.NewStorage(minioStorage, breakers.S3),
+		resilience.NewPublisher(broker.NewPublisher(amqpChannel), breakers.RabbitMQ),
+	)
 	webHandlers := webui.NewHandlers(avatarService)
 
 	server := api.NewAvatarServer(
@@ -143,7 +165,9 @@ func main() {
 
 	e := echo.New()
 	e.HideBanner = true
-	useMiddleware(e)
+	e.Server.ReadHeaderTimeout = readHeaderTimeout
+	e.Server.IdleTimeout = idleTimeout
+	useMiddleware(e, cfg.RateLimitRPS, cfg.RateLimitBurst)
 
 	e.GET("/metrics", echoprometheus.NewHandler())
 	e.Static("/", "web/static")
@@ -184,11 +208,21 @@ func main() {
 //
 // otelecho идёт сразу за внешним Recover, чтобы спан запроса создавался
 // раньше метрик и лога доступа — они видят trace_id.
-func useMiddleware(e *echo.Echo) {
+//
+// Rate limiter стоит после метрик и лога доступа: отклонённые запросы (429)
+// видны и в avatar_requests_total{code="429"}, и в логах.
+//
+// Здесь же подключается обработчик ошибок, отвечающий 503 на разомкнутый
+// circuit breaker.
+func useMiddleware(e *echo.Echo, rateLimitRPS float64, rateLimitBurst int) {
+	e.HTTPErrorHandler = httpErrorHandler(e)
+
 	e.Use(middleware.Recover())
 	e.Use(otelecho.Middleware(serviceName))
 	e.Use(echoprometheus.NewMiddleware("avatar"))
 	e.Use(requestLogger())
+	e.Use(rateLimiter(rateLimitRPS, rateLimitBurst))
+	e.Use(middleware.ContextTimeout(requestTimeout))
 	e.Use(middleware.Recover())
 }
 

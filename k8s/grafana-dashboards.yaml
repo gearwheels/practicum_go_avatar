@@ -1,0 +1,909 @@
+# СГЕНЕРИРОВАНО автоматически из helm/gophprofile — не редактируйте вручную.
+# Обновить: ./scripts/render-k8s.sh
+#
+# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения
+# используйте Helm напрямую с нужным values-файлом.
+---
+# Source: gophprofile/templates/grafana-dashboards.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gophprofile-dashboard-avatar-service
+  labels:
+    helm.sh/chart: gophprofile-0.1.0
+    app.kubernetes.io/name: gophprofile
+    app.kubernetes.io/instance: gophprofile
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gophprofile
+    grafana_dashboard: "1"
+data:
+  avatar-service.json: |-
+    {
+      "uid": "gophprofile-overview",
+      "title": "GophProfile — Avatar Service",
+      "description": "Обзор сервиса аватарок: RED-метрики HTTP, использование ресурсов и бизнес-KPI.",
+      "tags": ["gophprofile", "avatars"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "templating": { "list": [] },
+      "annotations": { "list": [] },
+      "panels": [
+        {
+          "type": "row",
+          "title": "Service overview",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "Server",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+          "targets": [
+            { "refId": "A", "expr": "up{job=~\"(avatar|gophprofile)-server\"}", "instant": true }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 0 } } },
+                { "type": "value", "options": { "1": { "text": "UP", "color": "green", "index": 1 } } }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Worker",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+          "targets": [
+            { "refId": "A", "expr": "up{job=~\"(avatar|gophprofile)-worker\"}", "instant": true }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 0 } } },
+                { "type": "value", "options": { "1": { "text": "UP", "color": "green", "index": 1 } } }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Request rate",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+          "targets": [
+            { "refId": "A", "expr": "sum(rate(avatar_requests_total{url!=\"/metrics\"}[5m]))", "instant": true }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "value",
+            "graphMode": "area"
+          },
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "decimals": 2, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Error rate (5xx)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * (sum(rate(avatar_requests_total{code=~\"5..\",url!=\"/metrics\"}[5m])) or vector(0)) / clamp_min(sum(rate(avatar_requests_total{url!=\"/metrics\"}[5m])), 0.0001)",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "red", "value": 5 }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Latency p95",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(avatar_request_duration_seconds_bucket{url!=\"/metrics\"}[5m])))",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 3,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "red", "value": 5 }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Uploads total",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+          "targets": [
+            { "refId": "A", "expr": "sum(avatars_uploads_total)", "instant": true }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "value",
+            "graphMode": "area"
+          },
+          "fieldConfig": {
+            "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] } },
+            "overrides": []
+          }
+        },
+    
+        {
+          "type": "row",
+          "title": "RED metrics (Rate / Errors / Duration)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Rate — запросы по маршрутам",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 6 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (url) (rate(avatar_requests_total{url!=\"/metrics\"}[5m]))",
+              "legendFormat": "{{url}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Errors — ответы по кодам",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 6 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (code) (rate(avatar_requests_total{url!=\"/metrics\"}[5m]))",
+              "legendFormat": "HTTP {{code}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 70, "showPoints": "never", "stacking": { "mode": "normal", "group": "A" } }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Duration — перцентили ответа",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 6 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(avatar_request_duration_seconds_bucket{url!=\"/metrics\"}[5m])))",
+              "legendFormat": "p50"
+            },
+            {
+              "refId": "B",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(avatar_request_duration_seconds_bucket{url!=\"/metrics\"}[5m])))",
+              "legendFormat": "p95"
+            },
+            {
+              "refId": "C",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(avatar_request_duration_seconds_bucket{url!=\"/metrics\"}[5m])))",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+    
+        {
+          "type": "row",
+          "title": "Resource utilization",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Соединения с БД (пул pgx)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 15 },
+          "targets": [
+            { "refId": "A", "expr": "db_pool_total_conns", "legendFormat": "{{job}} — всего" },
+            { "refId": "B", "expr": "db_pool_acquired_conns", "legendFormat": "{{job}} — занято" },
+            { "refId": "C", "expr": "db_pool_idle_conns", "legendFormat": "{{job}} — простаивает" },
+            { "refId": "D", "expr": "db_pool_max_conns", "legendFormat": "{{job}} — лимит" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Глубина очередей RabbitMQ",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 15 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (queue) (rabbitmq_queue_messages_ready)",
+              "legendFormat": "{{queue}} — ожидают"
+            },
+            {
+              "refId": "B",
+              "expr": "sum by (queue) (rabbitmq_queue_messages_unacked)",
+              "legendFormat": "{{queue}} — в обработке"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Go-рантайм: горутины и heap",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 15 },
+          "targets": [
+            { "refId": "A", "expr": "go_goroutines", "legendFormat": "{{job}} — горутины" },
+            { "refId": "B", "expr": "go_memstats_heap_inuse_bytes", "legendFormat": "{{job}} — heap" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byRegexp", "options": ".*heap.*" },
+                "properties": [
+                  { "id": "unit", "value": "bytes" },
+                  { "id": "custom.axisPlacement", "value": "right" }
+                ]
+              }
+            ]
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+    
+        {
+          "type": "row",
+          "title": "Business KPIs",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Загрузки и удаления аватарок",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (status) (rate(avatars_uploads_total[5m])) * 60", "legendFormat": "загрузки — {{status}}" },
+            { "refId": "B", "expr": "sum by (status) (rate(avatars_deletes_total[5m])) * 60", "legendFormat": "удаления — {{status}}" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 2,
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "auto", "axisLabel": "операций/мин" }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "stat",
+          "title": "Доля успешных загрузок",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 4, "x": 8, "y": 24 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * (sum(avatars_uploads_total{status=\"success\"}) or vector(0)) / clamp_min(sum(avatars_uploads_total), 1)",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 90 },
+                  { "color": "green", "value": 99 }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Длительность загрузки (p95 / p50)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 6, "x": 12, "y": 24 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(avatars_upload_duration_seconds_bucket[5m])))",
+              "legendFormat": "p95"
+            },
+            {
+              "refId": "B",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(avatars_upload_duration_seconds_bucket[5m])))",
+              "legendFormat": "p50"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Объём хранилища по пользователям",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 6, "x": 18, "y": 24 },
+          "targets": [
+            { "refId": "A", "expr": "topk(10, max by (user_id) (avatars_storage_bytes))", "legendFormat": "{{user_id}}" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "showPoints": "auto", "stacking": { "mode": "normal", "group": "A" } }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+    
+        {
+          "type": "row",
+          "title": "Асинхронная обработка (worker)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Обработка сообщений из очередей",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 33 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (queue, status) (rate(worker_messages_total[5m])) * 60",
+              "legendFormat": "{{queue}} — {{status}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 2,
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "auto", "axisLabel": "сообщений/мин" }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Генерация миниатюр",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 33 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (status) (rate(avatars_thumbnails_generated_total[5m])) * 60",
+              "legendFormat": "{{status}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 2,
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "auto", "axisLabel": "наборов/мин" }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Длительность генерации миниатюр (p95)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 33 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(avatars_thumbnail_duration_seconds_bucket[5m])))",
+              "legendFormat": "p95"
+            },
+            {
+              "refId": "B",
+              "expr": "histogram_quantile(0.95, sum by (le, queue) (rate(worker_message_duration_seconds_bucket[5m])))",
+              "legendFormat": "{{queue}} p95"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "row",
+          "title": "Устойчивость (circuit breaker, rate limiting)",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 41 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "state-timeline",
+          "title": "Состояние circuit breaker",
+          "description": "closed — зависимость работает; open — обращения к ней отклоняются сразу (503); half-open — пробные запросы.",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 42 },
+          "targets": [
+            { "refId": "A", "expr": "max by (name) (circuit_breaker_state)", "legendFormat": "{{name}}" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": {
+                  "0": { "text": "closed", "color": "green" },
+                  "1": { "text": "half-open", "color": "yellow" },
+                  "2": { "text": "open", "color": "red" }
+                } }
+              ],
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 } ] }
+            },
+            "overrides": []
+          },
+          "options": { "showValue": "auto", "legend": { "showLegend": false } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Отклонено circuit breaker",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 42 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (name) (rate(circuit_breaker_rejected_total[5m]))", "legendFormat": "{{name}}" }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Rate limiting: ответы 429 и 503",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 42 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (code) (rate(avatar_requests_total{code=~\"429|503\"}[5m]))", "legendFormat": "{{code}}" }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        }
+      ]
+    }
+    
+
+---
+# Source: gophprofile/templates/grafana-dashboards.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gophprofile-dashboard-cluster-state
+  labels:
+    helm.sh/chart: gophprofile-0.1.0
+    app.kubernetes.io/name: gophprofile
+    app.kubernetes.io/instance: gophprofile
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gophprofile
+    grafana_dashboard: "1"
+data:
+  cluster-state.json: |-
+    {
+      "uid": "gophprofile-cluster",
+      "title": "GophProfile — состояние в кластере",
+      "description": "Состояние развёртывания GophProfile в Kubernetes: поды, готовность, рестарты, HPA, потребление CPU/памяти относительно requests/limits, узлы. Источник — kube-state-metrics, cAdvisor и node-exporter.",
+      "tags": ["gophprofile", "kubernetes"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "type": "query",
+            "name": "namespace",
+            "label": "Namespace",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "query": { "query": "label_values(kube_pod_info, namespace)", "refId": "ns" },
+            "definition": "label_values(kube_pod_info, namespace)",
+            "current": { "text": "gophprofile", "value": "gophprofile" },
+            "refresh": 2,
+            "sort": 1
+          }
+        ]
+      },
+      "annotations": { "list": [] },
+      "panels": [
+        {
+          "type": "row",
+          "title": "Поды",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "Поды Running",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+          "targets": [
+            { "refId": "A", "expr": "sum(kube_pod_status_phase{namespace=\"$namespace\", phase=\"Running\"})", "instant": true }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "title": "Поды не готовы",
+          "description": "Поды, выведенные из балансировки: readiness-проба не проходит.",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+          "targets": [
+            { "refId": "A", "expr": "sum(kube_pod_status_ready{namespace=\"$namespace\", condition=\"false\"}) or vector(0)", "instant": true }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+            },
+            "overrides": []
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "title": "Рестарты контейнеров за 1ч",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+          "targets": [
+            { "refId": "A", "expr": "round(sum(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}[1h]))) or vector(0)", "instant": true }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 5 } ] }
+            },
+            "overrides": []
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" }
+        },
+        {
+          "type": "stat",
+          "title": "Узлы Ready",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+          "targets": [
+            { "refId": "A", "expr": "sum(kube_node_status_condition{condition=\"Ready\", status=\"true\"})", "legendFormat": "ready", "instant": true },
+            { "refId": "B", "expr": "count(kube_node_info)", "legendFormat": "всего", "instant": true }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name" }
+        },
+        {
+          "type": "table",
+          "title": "Поды: фаза, узел, рестарты",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 5 },
+          "targets": [
+            { "refId": "A", "expr": "max by (pod, node) (kube_pod_info{namespace=\"$namespace\"})", "format": "table", "instant": true },
+            { "refId": "B", "expr": "max by (pod) (kube_pod_status_ready{namespace=\"$namespace\", condition=\"true\"})", "format": "table", "instant": true },
+            { "refId": "C", "expr": "sum by (pod) (kube_pod_container_status_restarts_total{namespace=\"$namespace\"})", "format": "table", "instant": true }
+          ],
+          "transformations": [
+            { "id": "merge", "options": {} },
+            { "id": "organize", "options": {
+              "excludeByName": { "Time": true, "Value #A": true },
+              "renameByName": { "pod": "Под", "node": "Узел", "Value #B": "Готов (1/0)", "Value #C": "Рестарты" }
+            } }
+          ],
+          "fieldConfig": { "defaults": {}, "overrides": [] },
+          "options": { "showHeader": true, "sortBy": [ { "displayName": "Под", "desc": false } ] }
+        },
+        {
+          "type": "row",
+          "title": "Масштабирование",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "HPA: текущие / желаемые / максимум реплик",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "targets": [
+            { "refId": "A", "expr": "max by (horizontalpodautoscaler) (kube_horizontalpodautoscaler_status_current_replicas{namespace=\"$namespace\"})", "legendFormat": "{{horizontalpodautoscaler}} — текущие" },
+            { "refId": "B", "expr": "max by (horizontalpodautoscaler) (kube_horizontalpodautoscaler_status_desired_replicas{namespace=\"$namespace\"})", "legendFormat": "{{horizontalpodautoscaler}} — желаемые" },
+            { "refId": "C", "expr": "max by (horizontalpodautoscaler) (kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"$namespace\"})", "legendFormat": "{{horizontalpodautoscaler}} — максимум" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "lineInterpolation": "stepAfter" } }, "overrides": [] },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Deployment/StatefulSet: доступные реплики",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+          "targets": [
+            { "refId": "A", "expr": "max by (deployment) (kube_deployment_status_replicas_available{namespace=\"$namespace\"})", "legendFormat": "{{deployment}}" },
+            { "refId": "B", "expr": "max by (statefulset) (kube_statefulset_status_replicas_ready{namespace=\"$namespace\"})", "legendFormat": "{{statefulset}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "showPoints": "never", "lineInterpolation": "stepAfter" } }, "overrides": [] },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "row",
+          "title": "Ресурсы подов",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "CPU по подам",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\", container!=\"\", container!=\"POD\"}[2m]))", "legendFormat": "{{pod}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 5, "showPoints": "never", "axisLabel": "ядра" } }, "overrides": [] },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "calcs": ["lastNotNull", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Память (working set) по подам",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", container!=\"\", container!=\"POD\"})", "legendFormat": "{{pod}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 5, "showPoints": "never" } }, "overrides": [] },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "calcs": ["lastNotNull", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "bargauge",
+          "title": "CPU относительно requests (основа для HPA)",
+          "description": "HPA считает загрузку от requests: при целевых 70% реплики добавляются, когда среднее по подам выше порога.",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 31 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\", container!=\"\", container!=\"POD\"}[2m])) / sum by (pod) (kube_pod_container_resource_requests{namespace=\"$namespace\", resource=\"cpu\"})",
+              "legendFormat": "{{pod}}",
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 200,
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 70 }, { "color": "red", "value": 100 } ] }
+            },
+            "overrides": []
+          },
+          "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "type": "bargauge",
+          "title": "Память относительно limits",
+          "description": "Приближение к 100% — риск OOMKill.",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 31 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", container!=\"\", container!=\"POD\"}) / sum by (pod) (kube_pod_container_resource_limits{namespace=\"$namespace\", resource=\"memory\"})",
+              "legendFormat": "{{pod}}",
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 80 }, { "color": "red", "value": 90 } ] }
+            },
+            "overrides": []
+          },
+          "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Рестарты контейнеров",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\"}[10m]))", "legendFormat": "{{pod}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "showPoints": "never" } }, "overrides": [] },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Сеть: принято / отправлено",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
+          "targets": [
+            { "refId": "A", "expr": "sum by (pod) (rate(container_network_receive_bytes_total{namespace=\"$namespace\"}[2m]))", "legendFormat": "{{pod}} rx" },
+            { "refId": "B", "expr": "-sum by (pod) (rate(container_network_transmit_bytes_total{namespace=\"$namespace\"}[2m]))", "legendFormat": "{{pod}} tx" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 5, "showPoints": "never" } }, "overrides": [] },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "row",
+          "title": "Узлы",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 47 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Загрузка CPU узлов",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+          "targets": [
+            { "refId": "A", "expr": "100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m])))", "legendFormat": "{{instance}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" } }, "overrides": [] },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Использование памяти узлов",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
+          "targets": [
+            { "refId": "A", "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "{{instance}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" } }, "overrides": [] },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        }
+      ]
+    }
+    
+
+---
+# Source: gophprofile/templates/grafana-dashboards.yaml
+# Дашборды Grafana. Sidecar Grafana (kube-prometheus-stack) находит ConfigMap
+# по метке во всех namespace и загружает JSON без перезапуска Grafana.
+#
+# avatar-service.json — копия monitoring/grafana/dashboards/avatar-service.json
+# (тот же дашборд, что в docker-compose); синхронизируется скриптом
+# scripts/render-k8s.sh.
+

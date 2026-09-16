@@ -129,16 +129,24 @@ kind create cluster --config kind/cluster.yaml
 
 # 2. Ingress-контроллер и metrics-server (нужен для HPA)
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.12.0/deploy/static/provider/kind/deploy.yaml
+# Отказ по лимиту запросов — 429, а не 503 по умолчанию (иначе его не
+# отличить от недоступности сервиса):
+kubectl patch configmap ingress-nginx-controller -n ingress-nginx --type merge \
+  -p '{"data":{"limit-req-status-code":"429","limit-conn-status-code":"429"}}'
 kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
 # В kind у kubelet самоподписанный сертификат:
 kubectl patch deployment metrics-server -n kube-system --type=json \
   -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
 
-# 3. Собрать образ и загрузить его в кластер
+# 3. Мониторинг: Prometheus Operator, Prometheus, Alertmanager, Grafana,
+#    kube-state-metrics, node-exporter (kube-prometheus-stack)
+./monitoring/k8s/install.sh
+
+# 4. Собрать образ и загрузить его в кластер
 docker build -f docker/Dockerfile -t gophprofile:local .
 kind load docker-image gophprofile:local --name gophprofile
 
-# 4. Установить чарт
+# 5. Установить чарт (ServiceMonitor, алерты и дашборды ставятся вместе с ним)
 helm install gophprofile helm/gophprofile \
   -f helm/gophprofile/values-dev.yaml \
   -n gophprofile --create-namespace
@@ -166,7 +174,12 @@ curl -H "Host: avatars.local" http://localhost/health
 | ConfigMap, Secret | Конфигурация и учётные данные |
 | HPA, PodDisruptionBudget | Масштабирование и устойчивость при обслуживании узлов |
 | NetworkPolicy, RBAC, SecurityContext | Ограничение сети и прав |
-| ServiceMonitor | Автообнаружение подов Prometheus (нужны CRD Prometheus Operator) |
+| ServiceMonitor | Автообнаружение server, worker и RabbitMQ Prometheus'ом |
+| PrometheusRule | Правила алертов (см. «Алерты») |
+| ConfigMap с меткой `grafana_dashboard` | Дашборды Grafana: приложение и состояние в кластере |
+
+ServiceMonitor и PrometheusRule создаются, только если в кластере есть CRD
+Prometheus Operator, — без стека мониторинга чарт ставится как обычно.
 
 ### Окружения
 
@@ -193,15 +206,89 @@ helm history gophprofile -n gophprofile              # история релиз
 helm rollback gophprofile -n gophprofile             # откат
 ```
 
+### Мониторинг в кластере
+
+Стек ставится скриптом [monitoring/k8s/install.sh](monitoring/k8s/install.sh)
+(kube-prometheus-stack в namespace `monitoring`, значения —
+[kube-prometheus-stack-values.yaml](monitoring/k8s/kube-prometheus-stack-values.yaml)).
+
+```bash
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3001:80           # admin / admin
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 19090:9090
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-alertmanager 9093:9093
+```
+
+- **Сбор метрик.** Prometheus находит поды через ServiceMonitor
+  (`gophprofile-server`, `-worker`, `-rabbitmq`). У ServiceMonitor и
+  PrometheusRule есть метка `release: kube-prometheus-stack` — без неё
+  стандартный Prometheus Operator их игнорирует. Если стек установлен под
+  другим именем релиза, поменяйте `serviceMonitor.labels` и `alerts.labels`.
+  Проверка: Prometheus → Status → Targets, у всех таргетов `UP`.
+- **Дашборды** (Grafana → Dashboards, тег `gophprofile`):
+  - *GophProfile — Avatar Service* — RED-метрики, пул БД, очереди, бизнес-KPI,
+    состояние circuit breaker и отказы по rate limit. Тот же дашборд, что в
+    docker-compose.
+  - *GophProfile — состояние в кластере* — поды (фаза, готовность, узел,
+    рестарты), HPA (текущие/желаемые/максимум реплик), реплики
+    Deployment/StatefulSet, CPU и память подов относительно requests/limits,
+    сеть, загрузка узлов.
+
+### Алерты
+
+Правила — в [templates/prometheusrule.yaml](helm/gophprofile/templates/prometheusrule.yaml),
+пороги настраиваются в `alerts.*`. Сработавшие алерты видны в Prometheus →
+Alerts и в Alertmanager.
+
+| Алерт | Условие | Важность | Что делать |
+|---|---|---|---|
+| `GophProfileTargetDown` | Метрики server/worker не снимаются 2 мин | critical | Под упал или завис: `kubectl describe pod`, логи |
+| `GophProfilePodNotReady` | Под не готов 5 мин | warning | Смотреть события пода и `/livez` |
+| `GophProfilePodCrashLooping` | Больше 3 рестартов за 15 мин | critical | `kubectl logs --previous`, проверить OOMKilled и лимиты |
+| `GophProfileHPAAtMaxReplicas` | HPA на максимуме реплик 15 мин | warning | Поднять `maxReplicas` или ёмкость узлов |
+| `GophProfileHighErrorRate` | Доля 5xx выше 5% за 5 мин | critical | Логи в Grafana, трейсы, состояние зависимостей |
+| `GophProfileHighLatencyP95` | p95 выше 1с 10 мин | warning | Панели длительности, пул БД, нагрузка на узлы |
+| `GophProfileRateLimitRejections` | Больше 1 отказа 429 в секунду 10 мин | info | Злоупотребление или заниженный `config.rateLimitRPS` |
+| `GophProfileCircuitBreakerOpen` | Брейкер Postgres/S3/RabbitMQ разомкнут дольше 1 мин | critical | Зависимость недоступна: `/health` покажет какая |
+| `GophProfileStorageStatsDown` | Не считается занятое хранилище 5 мин | warning | Проверить доступность Postgres |
+| `GophProfileQueueBacklog` | Больше 100 сообщений ждут в очереди 10 мин | warning | Воркеры не справляются или остановлены |
+
+### Устойчивость
+
+- **Rate limiting** в два рубежа. Ingress-nginx ограничивает частоту по IP
+  клиента (`nginx.ingress.kubernetes.io/limit-rps`), приложение — по
+  пользователю `X-User-ID`, а без заголовка по IP (`config.rateLimitRPS`,
+  `config.rateLimitBurst`, лимит на под). Превышение — `429` с `Retry-After`.
+  `/health`, `/livez` и `/metrics` не ограничиваются.
+- **Circuit breaker** стоит на каждой внешней зависимости: PostgreSQL, S3,
+  RabbitMQ (`internal/resilience`). После `config.circuitBreakerFailureThreshold`
+  отказов подряд обращения к зависимости сразу отклоняются, и клиент мгновенно
+  получает `503`, а не ждёт таймаута. Через `config.circuitBreakerOpenTimeout`
+  проходит пробный запрос. Бизнес-ошибки («не найдено») брейкер не
+  размыкают. Операции, которым сломанная зависимость не нужна, продолжают
+  работать: при отказе S3 метаданные и списки отдаются.
+  Состояние видно в метрике `circuit_breaker_state{name}`.
+- **Таймауты.** Запрос ограничен 30 с. Для S3 заданы таймауты соединения и
+  ожидания ответа, а повторов меньше, чем по умолчанию. У HTTP-сервера есть
+  `ReadHeaderTimeout` (защита от Slowloris).
+- **Пробы.** Readiness и liveness проверяют только сам процесс (`/livez`). Если
+  бы readiness зависела от общего для всех реплик S3 или БД, его отказ разом
+  вывел бы из балансировки все поды. `/health` с проверкой зависимостей нужен
+  для мониторинга и диагностики.
+- **Graceful shutdown.** `preStop` ждёт, пока под уберут из endpoints. Затем
+  сервер дренирует соединения до 10 с, а воркер дообрабатывает текущее
+  сообщение (`terminationGracePeriodSeconds` 45/60 с). PodDisruptionBudget не
+  даёт одновременно вывести все реплики.
+
 ### Особенности стенда
 
-- **Стек наблюдаемости остаётся в docker-compose.** В кластер выносится
-  приложение и его инфраструктура; для метрик в K8s чарт отдаёт
-  `ServiceMonitor` — включите `serviceMonitor.enabled=true`, если в кластере
-  установлен Prometheus Operator.
-- **NetworkPolicy применяет CNI.** Манифесты корректны и принимаются любым
-  кластером, но фактическая изоляция зависит от того, поддерживает ли ваш CNI
-  сетевые политики.
+- **Jaeger и Loki остаются в docker-compose.** В кластер вынесены приложение,
+  его инфраструктура и метрики с алертами. Трейсинг в K8s включается
+  параметром `config.otlpEndpoint`.
+- **NetworkPolicy применяет CNI.** kindnet в kind 0.24+ политики поддерживает,
+  так что на стенде изоляция реальная: запрос к серверу из чужого namespace
+  не проходит. В продакшене нужен CNI с поддержкой политик (Calico, Cilium).
+  Выход к внешним managed-сервисам разрешается через
+  `networkPolicy.extraEgress`.
 - **Миграции выполняет Helm-хук**, поды сервера стартуют с
   `RUN_MIGRATIONS=false`. Это нужно, чтобы несколько реплик не применяли схему
   наперегонки.

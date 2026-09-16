@@ -17,6 +17,8 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: gophprofile
   annotations:
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
     nginx.ingress.kubernetes.io/proxy-body-size: 10m
     nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
 spec:

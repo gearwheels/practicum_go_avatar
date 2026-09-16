@@ -28,4 +28,8 @@ data:
   # Миграции накатывает Job-хук (см. job-migrate.yaml), поэтому поды сервера
   # их не запускают — иначе реплики стартовали бы наперегонки.
   RUN_MIGRATIONS: "false"
+  RATE_LIMIT_RPS: "20"
+  RATE_LIMIT_BURST: "40"
+  CIRCUIT_BREAKER_FAILURE_THRESHOLD: "5"
+  CIRCUIT_BREAKER_OPEN_TIMEOUT: "30s"
 

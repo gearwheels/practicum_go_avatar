@@ -19,6 +19,7 @@ import (
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/resilience"
 	"go-avatar-service/internal/retryutil"
 	"go-avatar-service/internal/storage"
 	"go-avatar-service/internal/worker"
@@ -115,7 +116,14 @@ func main() {
 	}()
 
 	repo := postgres.NewAvatarRepository(pool)
-	handler := worker.New(repo, minioStorage)
+	// Как и в сервере, база и S3 вызываются через circuit breaker: при их
+	// отказе обработка сообщения завершается ошибкой сразу, а сообщение уходит
+	// на повтор, вместо того чтобы держать консьюмер на таймаутах.
+	breakers := resilience.NewBreakers(cfg.BreakerFailureThreshold, cfg.BreakerOpenTimeout)
+	handler := worker.New(
+		resilience.NewRepository(repo, breakers.Postgres),
+		resilience.NewStorage(minioStorage, breakers.S3),
+	)
 	consumer := broker.NewConsumer(amqpChannel)
 
 	var wg sync.WaitGroup
