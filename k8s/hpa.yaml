@@ -45,7 +45,6 @@ spec:
       # А вниз — медленно, чтобы не «схлопывать» реплики на кратковременных
       # провалах трафика и не гонять поды туда-сюда.
       stabilizationWindowSeconds: 300
-
 ---
 # Source: gophprofile/templates/hpa.yaml
 apiVersion: autoscaling/v2
@@ -85,4 +84,3 @@ spec:
       stabilizationWindowSeconds: 30
     scaleDown:
       stabilizationWindowSeconds: 300
-

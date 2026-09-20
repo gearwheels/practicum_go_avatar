@@ -597,8 +597,6 @@ data:
         }
       ]
     }
-    
-
 ---
 # Source: gophprofile/templates/grafana-dashboards.yaml
 apiVersion: v1
@@ -896,8 +894,6 @@ data:
         }
       ]
     }
-    
-
 ---
 # Source: gophprofile/templates/grafana-dashboards.yaml
 # Дашборды Grafana. Sidecar Grafana (kube-prometheus-stack) находит ConfigMap
@@ -906,4 +902,3 @@ data:
 # avatar-service.json — копия monitoring/grafana/dashboards/avatar-service.json
 # (тот же дашборд, что в docker-compose); синхронизируется скриптом
 # scripts/render-k8s.sh.
-

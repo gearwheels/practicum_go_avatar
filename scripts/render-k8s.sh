@@ -14,6 +14,9 @@ CHART_DIR="helm/gophprofile"
 OUT_DIR="k8s"
 RELEASE="gophprofile"
 NAMESPACE="gophprofile"
+# Заглушка вместо паролей в сгенерированном Secret: реальные значения
+# передаются при установке чарта и в репозитории не хранятся.
+PASSWORD_PLACEHOLDER="CHANGE_ME"
 
 command -v helm >/dev/null 2>&1 || { echo "helm не найден в PATH" >&2; exit 1; }
 
@@ -30,9 +33,17 @@ echo "Рендерю $CHART_DIR -> $OUT_DIR ..."
 # templates/ — так манифесты удобнее читать и применять выборочно.
 # --api-versions: helm template не видит кластер, а ServiceMonitor и
 # PrometheusRule рендерятся только при наличии CRD Prometheus Operator.
+#
+# Паролей по умолчанию в чарте нет, поэтому здесь подставляются плейсхолдеры:
+# сгенерированные манифесты — материал для чтения и для `kubectl apply` на
+# стенде, а не готовый к применению Secret. Реальные пароли задаются при
+# установке чарта и в репозиторий не попадают.
 helm template "$RELEASE" "$CHART_DIR" \
   --namespace "$NAMESPACE" \
   --values "$CHART_DIR/values.yaml" \
+  --set secrets.postgresPassword="$PASSWORD_PLACEHOLDER" \
+  --set secrets.rabbitmqPassword="$PASSWORD_PLACEHOLDER" \
+  --set secrets.minioPassword="$PASSWORD_PLACEHOLDER" \
   --api-versions monitoring.coreos.com/v1/ServiceMonitor \
   --api-versions monitoring.coreos.com/v1/PrometheusRule \
   --output-dir "$OUT_DIR.tmp" >/dev/null
@@ -50,6 +61,11 @@ for f in "$OUT_DIR"/*.yaml; do
     echo "#"
     echo "# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения"
     echo "# используйте Helm напрямую с нужным values-файлом."
+    if grep -q "^kind: Secret" "$f"; then
+      echo "#"
+      echo "# ВНИМАНИЕ: пароли здесь — заглушки $PASSWORD_PLACEHOLDER. Перед kubectl apply"
+      echo "# подставьте свои значения или создайте Secret отдельно."
+    fi
     cat "$f"
   } > "$tmp"
   mv "$tmp" "$f"

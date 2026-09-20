@@ -39,8 +39,11 @@ Ingress выключен. Пробросьте порт:
 снимать метрики с /metrics.
 {{- end }}
 
-{{- if and .Values.infra.postgres.enabled (eq .Values.secrets.postgresPassword "avatar") }}
+{{- if not .Values.secrets.existingSecret }}
 
-ВНИМАНИЕ: используются пароли по умолчанию из values.yaml. Для любого
-окружения кроме локального задайте свои значения или secrets.existingSecret.
+Учётные данные: Secret {{ include "gophprofile.secretName" . }} создан чартом
+из паролей, переданных при установке. Паролей по умолчанию в чарте нет —
+без явных значений рендер падает. Для окружений сложнее локального стенда
+храните учётные данные вне чарта и подключайте их через
+secrets.existingSecret (см. values-prod.yaml).
 {{- end }}

@@ -86,6 +86,9 @@ HPA для обоих компонентов — [hpa.yaml](../helm/gophprofile/
 - **ServiceAccount и RBAC:** [serviceaccount.yaml](../helm/gophprofile/templates/serviceaccount.yaml). Приложению не нужен доступ к API Kubernetes, поэтому токен в поды не монтируется (`automountServiceAccountToken: false`), а Role даёт только чтение собственной ConfigMap.
 - **NetworkPolicy:** [networkpolicy.yaml](../helm/gophprofile/templates/networkpolicy.yaml) — default-deny плюс явные разрешения: входящий трафик к серверу только из namespace ingress-контроллера и от системы мониторинга, исходящий — только к своей инфраструктуре и DNS.
 
+- **Пароли обязательны, дефолтов нет:** в `values.yaml` пароли пустые, а шаблоны подставляют их через хелперы с функцией `required` ([_helpers.tpl](../helm/gophprofile/templates/_helpers.tpl)). Установка без явных значений падает на рендере: дефолтный пароль, лежащий в репозитории, при забытом `--set` означал бы публично известные учётные данные в рабочем кластере. Сгенерированные манифесты в [k8s/](../k8s) содержат заглушки `CHANGE_ME`, в продакшене учётные данные приходят из внешнего Secret (`secrets.existingSecret`).
+- **Ответы без внутренних деталей:** ни `500`, ни `503`, ни `400` не содержат текста оригинальной ошибки — иначе клиент увидел бы имя таблицы, SQLSTATE, адрес зависимости или подстроку DSN. Причина логируется на сервере с `trace_id` ([internal/api/handlers.go](../internal/api/handlers.go)).
+
 > **Ограничение локального стенда:** политики применяет CNI. В kind политики применяются kindnet, в других окружениях поведение может отличаться — проверяйте, что ваш CNI поддерживает NetworkPolicy.
 
 ### 5. Helm Chart

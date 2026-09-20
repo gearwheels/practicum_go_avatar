@@ -31,7 +31,6 @@ spec:
   policyTypes:
     - Ingress
     - Egress
-
 ---
 # Source: gophprofile/templates/networkpolicy.yaml
 apiVersion: networking.k8s.io/v1
@@ -97,7 +96,6 @@ spec:
           port: 5672
         - protocol: TCP
           port: 9000
-
 ---
 # Source: gophprofile/templates/networkpolicy.yaml
 apiVersion: networking.k8s.io/v1
@@ -155,7 +153,6 @@ spec:
           port: 5672
         - protocol: TCP
           port: 9000
-
 ---
 # Source: gophprofile/templates/networkpolicy.yaml
 # Джобы (миграции, создание бакета) тоже попадают под default-deny, потому
@@ -210,7 +207,6 @@ spec:
           port: 5672
         - protocol: TCP
           port: 9000
-
 ---
 # Source: gophprofile/templates/networkpolicy.yaml
 apiVersion: networking.k8s.io/v1
@@ -250,5 +246,3 @@ spec:
       ports:
         - protocol: TCP
           port: 15692
-
-

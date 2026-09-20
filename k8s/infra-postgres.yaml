@@ -30,7 +30,6 @@ spec:
     - name: postgres
       port: 5432
       targetPort: postgres
-
 ---
 # Source: gophprofile/templates/infra-postgres.yaml
 apiVersion: apps/v1
@@ -120,4 +119,3 @@ spec:
         resources:
           requests:
             storage: 1Gi
-

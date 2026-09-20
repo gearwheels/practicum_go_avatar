@@ -66,6 +66,25 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{/*
+Пароли. Дефолтов нет: required останавливает рендер, если пароль не задан,
+— это дешевле, чем обнаружить в рабочем окружении учётные данные из
+репозитория. Вызываются только там, где пароль действительно нужен, поэтому
+установка с готовым Secret (secrets.existingSecret) или с готовым DSN
+работает без них.
+*/}}
+{{- define "gophprofile.postgresPassword" -}}
+{{- required "secrets.postgresPassword не задан: передайте пароль (--set secrets.postgresPassword=...) или подключите готовый Secret через secrets.existingSecret" .Values.secrets.postgresPassword -}}
+{{- end -}}
+
+{{- define "gophprofile.rabbitmqPassword" -}}
+{{- required "secrets.rabbitmqPassword не задан: передайте пароль (--set secrets.rabbitmqPassword=...) или подключите готовый Secret через secrets.existingSecret" .Values.secrets.rabbitmqPassword -}}
+{{- end -}}
+
+{{- define "gophprofile.minioPassword" -}}
+{{- required "secrets.minioPassword не задан: передайте пароль (--set secrets.minioPassword=...) или подключите готовый Secret через secrets.existingSecret" .Values.secrets.minioPassword -}}
+{{- end -}}
+
+{{/*
 Имена сервисов инфраструктуры.
 */}}
 {{- define "gophprofile.postgresServiceName" -}}
@@ -90,7 +109,7 @@ DSN PostgreSQL. Если инфраструктура в кластере — с
 {{- else if .Values.infra.postgres.enabled -}}
 {{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable"
       .Values.secrets.postgresUser
-      .Values.secrets.postgresPassword
+      (include "gophprofile.postgresPassword" .)
       (include "gophprofile.postgresServiceName" .)
       .Values.secrets.postgresDatabase -}}
 {{- else -}}
@@ -107,7 +126,7 @@ URL RabbitMQ — та же логика, что и для DSN базы.
 {{- else if .Values.infra.rabbitmq.enabled -}}
 {{- printf "amqp://%s:%s@%s:5672/"
       .Values.secrets.rabbitmqUser
-      .Values.secrets.rabbitmqPassword
+      (include "gophprofile.rabbitmqPassword" .)
       (include "gophprofile.rabbitmqServiceName" .) -}}
 {{- else -}}
 {{- fail "infra.rabbitmq.enabled=false: задайте secrets.rabbitmqUrl или secrets.existingSecret" -}}

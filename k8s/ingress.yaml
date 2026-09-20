@@ -34,4 +34,3 @@ spec:
                 name: gophprofile-server
                 port:
                   number: 80
-

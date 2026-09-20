@@ -142,18 +142,28 @@ config:
   circuitBreakerOpenTimeout: 30s
 
 # --- Секреты ---
-# Значения по умолчанию годятся только для локального стенда.
-# В продакшене используйте существующий Secret (existingSecret) или
-# внешний менеджер секретов.
+# Паролей по умолчанию здесь нет намеренно. Дефолтный пароль в репозитории
+# публично известен, и забытый при выкате он означает скомпрометированные
+# учётные данные в рабочем окружении. Поэтому пароли обязательны: установка
+# без них падает на рендере (функция required, см. _helpers.tpl) — лучше
+# сломаться сразу, чем тихо подняться с небезопасными значениями.
+#
+# Задайте их при установке:
+#   --set secrets.postgresPassword=... --set secrets.rabbitmqPassword=... \
+#   --set secrets.minioPassword=...
+# либо подключите готовый Secret через secrets.existingSecret — тогда чарт
+# свой Secret не создаёт и пароли ему не нужны (так сделано в values-prod.yaml).
+#
+# Имена пользователей секретом не являются и остаются со значениями по умолчанию.
 secrets:
   existingSecret: ""
   postgresUser: avatar
-  postgresPassword: avatar
+  postgresPassword: ""
   postgresDatabase: avatar_service
   rabbitmqUser: guest
-  rabbitmqPassword: guest
+  rabbitmqPassword: ""
   minioUser: minioadmin
-  minioPassword: minioadmin
+  minioPassword: ""
   # Если инфраструктура внешняя (infra.*.enabled=false), задайте DSN целиком.
   databaseUrl: ""
   rabbitmqUrl: ""

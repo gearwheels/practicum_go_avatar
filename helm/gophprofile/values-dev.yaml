@@ -1,5 +1,17 @@
 # Локальная разработка в kind.
-# helm install gophprofile helm/gophprofile -f helm/gophprofile/values-dev.yaml
+#
+# Паролей здесь нет намеренно — даже «только для dev» они попали бы в
+# репозиторий. Задайте их при установке:
+#
+#   helm install gophprofile helm/gophprofile -f helm/gophprofile/values-dev.yaml \
+#     --set secrets.postgresPassword="$(openssl rand -hex 16)" \
+#     --set secrets.rabbitmqPassword="$(openssl rand -hex 16)" \
+#     --set secrets.minioPassword="$(openssl rand -hex 16)" \
+#     -n gophprofile --create-namespace
+#
+# При helm upgrade пароли нужно передать снова, и те же самые: Postgres и
+# MinIO применяют их при инициализации тома, и с новым паролем поды к уже
+# созданным данным не подключатся.
 
 image:
   tag: local

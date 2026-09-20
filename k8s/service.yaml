@@ -34,7 +34,6 @@ spec:
       port: 8080
       targetPort: http
       protocol: TCP
-
 ---
 # Source: gophprofile/templates/service.yaml
 apiVersion: v1
@@ -60,4 +59,3 @@ spec:
       port: 9091
       targetPort: metrics
       protocol: TCP
-

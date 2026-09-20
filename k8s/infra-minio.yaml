@@ -32,7 +32,6 @@ spec:
     - name: console
       port: 9001
       targetPort: console
-
 ---
 # Source: gophprofile/templates/infra-minio.yaml
 apiVersion: apps/v1
@@ -122,4 +121,3 @@ spec:
         resources:
           requests:
             storage: 2Gi
-

@@ -362,6 +362,29 @@ func TestHealthCheck_DownWhenComponentFails(t *testing.T) {
 	down, isDown := resp.(HealthCheck503JSONResponse)
 	require.True(t, isDown, "ожидался 503, получено %T", resp)
 	require.Equal(t, HealthStatusStatusDown, down.Status)
+
+	// /health доступен снаружи через Ingress: причина отказа зависимости
+	// наружу не уходит, её место — в логе сервера.
+	require.NotNil(t, down.Components.Database.Error)
+	require.Equal(t, msgDependencyDown, *down.Components.Database.Error)
+	require.NotContains(t, *down.Components.Database.Error, "нет соединения")
+}
+
+// Проба жизнеспособности тоже не раскрывает текст ошибки брокера.
+func TestLivenessCheck_DownHidesReason(t *testing.T) {
+	repo := newFakeRepo()
+	svc := avatar.NewService(repo, newFakeStorage(), fakePublisher{})
+	s := NewAvatarServer(svc, webui.NewHandlers(svc), fakePinger{}, fakePinger{},
+		fakePinger{err: errors.New("amqp: connection closed to rabbitmq:5672")})
+
+	resp, err := s.LivenessCheck(context.Background(), LivenessCheckRequestObject{})
+	require.NoError(t, err)
+
+	down, isDown := resp.(LivenessCheck503JSONResponse)
+	require.True(t, isDown, "ожидался 503, получено %T", resp)
+	require.NotNil(t, down.Reason)
+	require.Equal(t, msgBrokerDown, *down.Reason)
+	require.NotContains(t, *down.Reason, "rabbitmq:5672")
 }
 
 // ---------- недоступность зависимостей (circuit breaker) ----------
@@ -384,7 +407,31 @@ func TestGetAvatarMetadata_CircuitOpenIs503(t *testing.T) {
 	require.NoError(t, err)
 	r, ok := resp.(GetAvatarMetadata503JSONResponse)
 	require.True(t, ok, "ожидался 503, получено %T", resp)
-	require.Equal(t, "Service temporarily unavailable", r.Error)
+	require.Equal(t, msgUnavailable, r.Error)
+	// Из «postgres: circuit breaker is open» клиент узнал бы имя отказавшей
+	// зависимости и то, как она защищена, — деталей в ответе быть не должно.
+	require.Nil(t, r.Details)
+}
+
+// brokenRepo имитирует сбой БД с «говорящей» ошибкой: именно такой текст
+// раньше уходил клиенту в поле details.
+type brokenRepo struct{ *fakeRepo }
+
+func (brokenRepo) GetByID(context.Context, uuid.UUID) (domain.Avatar, error) {
+	return domain.Avatar{}, errors.New(`ERROR: relation "avatars" does not exist (SQLSTATE 42P01), dsn=postgres://avatar:secret@db:5432`)
+}
+
+func TestGetAvatarMetadata_InternalErrorHidesDetails(t *testing.T) {
+	svc := avatar.NewService(brokenRepo{newFakeRepo()}, newFakeStorage(), fakePublisher{})
+	s := NewAvatarServer(svc, webui.NewHandlers(svc), fakePinger{}, fakePinger{}, fakePinger{})
+
+	resp, err := s.GetAvatarMetadata(context.Background(), GetAvatarMetadataRequestObject{AvatarId: uuid.New()})
+	require.NoError(t, err)
+
+	r, ok := resp.(GetAvatarMetadata500JSONResponse)
+	require.True(t, ok, "ожидался 500, получено %T", resp)
+	require.Equal(t, msgInternalError, r.Error)
+	require.Nil(t, r.Details, "имя таблицы, SQLSTATE и DSN клиенту не показываем")
 }
 
 func TestDeleteAvatarById_CircuitOpenIs503(t *testing.T) {

@@ -113,8 +113,9 @@ var (
 	)
 )
 
-// SetCircuitBreakerState публикует состояние брейкера (значения совпадают с
-// gobreaker.State: 0 closed, 1 half-open, 2 open).
+// SetCircuitBreakerState публикует состояние брейкера: 0 closed,
+// 1 half-open, 2 open (см. internal/resilience). Эти значения подписаны на
+// панели дашборда, поэтому менять их нельзя.
 func SetCircuitBreakerState(name string, state int) {
 	circuitBreakerState.WithLabelValues(name).Set(float64(state))
 }

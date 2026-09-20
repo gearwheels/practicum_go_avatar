@@ -25,4 +25,3 @@ spec:
       app.kubernetes.io/name: gophprofile
       app.kubernetes.io/instance: gophprofile
       app.kubernetes.io/component: server
-

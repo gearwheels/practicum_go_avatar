@@ -35,7 +35,6 @@ spec:
       path: /metrics
       interval: 30s
       scrapeTimeout: 10s
-
 ---
 # Source: gophprofile/templates/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -65,7 +64,6 @@ spec:
       path: /metrics
       interval: 30s
       scrapeTimeout: 10s
-
 ---
 # Source: gophprofile/templates/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -95,4 +93,3 @@ spec:
       path: /metrics
       interval: 30s
       scrapeTimeout: 10s
-
