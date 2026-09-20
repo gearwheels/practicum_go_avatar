@@ -7,3 +7,8 @@ generate:
   embedded-spec: true
 output-options:
   skip-prune: true
+  # /metrics обслуживает middleware echoprometheus, а не сгенерированный
+  # обработчик: в спецификации эндпоинт описан для полноты, но роут для него
+  # генерировать не нужно — иначе он конфликтовал бы с middleware.
+  exclude-operation-ids:
+    - getMetrics

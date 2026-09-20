@@ -1,0 +1,79 @@
+# Локальная разработка в kind.
+#
+# Паролей здесь нет намеренно — даже «только для dev» они попали бы в
+# репозиторий. Задайте их при установке:
+#
+#   helm install gophprofile helm/gophprofile -f helm/gophprofile/values-dev.yaml \
+#     --set secrets.postgresPassword="$(openssl rand -hex 16)" \
+#     --set secrets.rabbitmqPassword="$(openssl rand -hex 16)" \
+#     --set secrets.minioPassword="$(openssl rand -hex 16)" \
+#     -n gophprofile --create-namespace
+#
+# При helm upgrade пароли нужно передать снова, и те же самые: Postgres и
+# MinIO применяют их при инициализации тома, и с новым паролем поды к уже
+# созданным данным не подключатся.
+
+image:
+  tag: local
+  pullPolicy: Never # образ загружается через `kind load docker-image`
+
+server:
+  replicaCount: 2
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 300m
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+
+worker:
+  replicaCount: 1
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 300m
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+
+config:
+  logLevel: debug
+  # Трейсинг выключен: Jaeger живёт в docker-compose, а не в кластере.
+  otlpEndpoint: ""
+
+ingress:
+  enabled: true
+  host: avatars.local
+
+# ServiceMonitor, алерты и дашборды: стек мониторинга ставится скриптом
+# monitoring/k8s/install.sh. Без него ресурсы Prometheus Operator просто
+# не создаются.
+serviceMonitor:
+  enabled: true
+
+alerts:
+  enabled: true
+
+# kindnet (kind >= 0.24) применяет NetworkPolicy — изоляция на стенде реальная.
+networkPolicy:
+  enabled: true
+
+infra:
+  postgres:
+    enabled: true
+    storage: 1Gi
+  rabbitmq:
+    enabled: true
+    storage: 1Gi
+  minio:
+    enabled: true
+    storage: 2Gi

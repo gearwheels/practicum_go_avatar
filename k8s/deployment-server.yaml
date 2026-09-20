@@ -1,0 +1,135 @@
+# СГЕНЕРИРОВАНО автоматически из helm/gophprofile — не редактируйте вручную.
+# Обновить: ./scripts/render-k8s.sh
+#
+# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения
+# используйте Helm напрямую с нужным values-файлом.
+---
+# Source: gophprofile/templates/deployment-server.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gophprofile-server
+  labels:
+    helm.sh/chart: gophprofile-0.1.0
+    app.kubernetes.io/name: gophprofile
+    app.kubernetes.io/instance: gophprofile
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gophprofile
+    app.kubernetes.io/component: server
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gophprofile
+      app.kubernetes.io/instance: gophprofile
+      app.kubernetes.io/component: server
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: gophprofile-0.1.0
+        app.kubernetes.io/name: gophprofile
+        app.kubernetes.io/instance: gophprofile
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: gophprofile
+        app.kubernetes.io/component: server
+      annotations:
+        # Пересоздать поды при изменении конфигурации или секретов —
+        # иначе они продолжат работать со старыми значениями.
+        checksum/config: dc000e6cf30743d66c7cb55a05825f081dc661f343ffa9b35bca2b8150b29943
+        checksum/secret: 319b729cf9a3100ce89c0a379b4dad2270bd2efc222cb7738752ebf40b9de4ca
+    spec:
+      serviceAccountName: gophprofile
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 45
+      # Реплики разносятся по узлам, чтобы падение одного узла не унесло сервис.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: gophprofile
+              app.kubernetes.io/instance: gophprofile
+              app.kubernetes.io/component: server
+      containers:
+        - name: server
+          image: "gophprofile:local"
+          imagePullPolicy: IfNotPresent
+          command: ["./server"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: gophprofile-config
+            - secretRef:
+                name: gophprofile-secrets
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          # Готовность зависит от БД/S3/брокера: под выводится из балансировки,
+          # пока зависимости недоступны, и возвращается сам после их починки.
+          readinessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Жизнеспособность не трогает внешние сервисы (см. /livez в
+          # cmd/server/main.go) — перезапуск только при невосстановимом состоянии.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          lifecycle:
+            preStop:
+              exec:
+                # Пауза перед остановкой: даём kube-proxy убрать под из
+                # endpoints до того, как сервер начнёт закрываться.
+                command: ["sleep", "5"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+          volumeMounts:
+            # Корневая ФС только для чтения, поэтому под временные файлы
+            # монтируется отдельный tmpfs.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

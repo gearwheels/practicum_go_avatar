@@ -1,0 +1,49 @@
+GophProfile развёрнут: релиз {{ .Release.Name }}, namespace {{ .Release.Namespace }}.
+
+Состояние:
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+{{- if .Values.ingress.enabled }}
+
+Доступ через Ingress:
+  http://{{ .Values.ingress.host }}/
+
+  Если имя не резолвится, добавьте в hosts-файл:
+    127.0.0.1 {{ .Values.ingress.host }}
+  либо обратитесь напрямую, подставив заголовок Host:
+    curl -H "Host: {{ .Values.ingress.host }}" http://localhost/health
+{{- else }}
+
+Ingress выключен. Пробросьте порт:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "gophprofile.fullname" . }}-server 8080:80
+  curl http://localhost:8080/health
+{{- end }}
+
+Полезные проверки:
+  # здоровье зависимостей (БД, S3, брокер)
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "gophprofile.fullname" . }}-server -- wget -qO- localhost:{{ .Values.server.containerPort }}/health
+
+  # результат миграций
+  kubectl logs -n {{ .Release.Namespace }} job/{{ include "gophprofile.fullname" . }}-migrate
+
+{{- if .Values.server.autoscaling.enabled }}
+
+  # автомасштабирование (требует metrics-server)
+  kubectl get hpa -n {{ .Release.Namespace }}
+{{- end }}
+
+{{- if not .Values.serviceMonitor.enabled }}
+
+Мониторинг: serviceMonitor.enabled=false. Включите его, если в кластере
+установлен Prometheus Operator, — тогда Prometheus сам найдёт поды и начнёт
+снимать метрики с /metrics.
+{{- end }}
+
+{{- if not .Values.secrets.existingSecret }}
+
+Учётные данные: Secret {{ include "gophprofile.secretName" . }} создан чартом
+из паролей, переданных при установке. Паролей по умолчанию в чарте нет —
+без явных значений рендер падает. Для окружений сложнее локального стенда
+храните учётные данные вне чарта и подключайте их через
+secrets.existingSecret (см. values-prod.yaml).
+{{- end }}

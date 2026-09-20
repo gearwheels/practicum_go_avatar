@@ -12,31 +12,66 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/labstack/echo-contrib/echoprometheus"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 
 	"go-avatar-service/internal/api"
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/config"
+	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/resilience"
 	"go-avatar-service/internal/retryutil"
 	"go-avatar-service/internal/services/avatar"
 	"go-avatar-service/internal/storage"
 	"go-avatar-service/internal/webui"
 )
 
-func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+// serviceName — под этим именем сервис виден в Jaeger и в логах.
+const (
+	serviceName = "avatar-server"
 
+	// requestTimeout — предел обработки одного запроса. По истечении контекст
+	// отменяется, и зависшие обращения к БД или S3 прерываются, а не держат
+	// соединение до таймаута балансировщика (60с в ingress). Ошибка по
+	// таймауту засчитывается circuit breaker как отказ зависимости.
+	requestTimeout = 30 * time.Second
+	// readHeaderTimeout защищает от клиентов, которые открывают соединение и
+	// бесконечно медленно шлют заголовки (Slowloris).
+	readHeaderTimeout = 10 * time.Second
+	idleTimeout       = 120 * time.Second
+)
+
+func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("ошибка загрузки конфигурации", "error", err)
+		slog.Error("ошибка загрузки конфигурации", "error", err)
 		os.Exit(1)
 	}
+
+	logger := observability.NewLogger(os.Stdout, serviceName, cfg.LogLevel)
+	slog.SetDefault(logger)
+
+	shutdownTracing, err := observability.InitTracing(ctx, serviceName, cfg.OTLPEndpoint)
+	if err != nil {
+		logger.Error("не удалось инициализировать трейсинг", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		// Отдельный контекст: основной к этому моменту уже отменён сигналом,
+		// а экспортёру нужно время дослать накопленные спаны.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			logger.Error("ошибка остановки трейсинга", "error", err)
+		}
+	}()
 
 	var pool *pgxpool.Pool
 	err = retryutil.Do(ctx, 5, 2*time.Second, func() error {
@@ -50,9 +85,22 @@ func main() {
 	}
 	defer pool.Close()
 
-	if err := postgres.RunMigrations(cfg.DatabaseURL, "migrations"); err != nil {
-		logger.Error("не удалось применить миграции", "error", err)
+	if err := observability.RegisterDBPoolMetrics(pool); err != nil {
+		logger.Error("не удалось зарегистрировать метрики пула БД", "error", err)
 		os.Exit(1)
+	}
+
+	// В Kubernetes миграции накатывает отдельный Job (Helm-хук), поэтому там
+	// RUN_MIGRATIONS=false: иначе несколько реплик стартуют наперегонки, и
+	// сбой посреди миграции оставит схему в состоянии dirty, после чего
+	// падать при старте будут уже все поды.
+	if cfg.RunMigrations {
+		if err := postgres.RunMigrations(cfg.DatabaseURL, "migrations"); err != nil {
+			logger.Error("не удалось применить миграции", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		logger.Info("миграции при старте пропущены (RUN_MIGRATIONS=false)")
 	}
 
 	minioStorage, err := storage.NewMinioStorage(cfg.MinioEndpoint, cfg.MinioUser, cfg.MinioPassword, cfg.MinioUseSSL, cfg.MinioBucket)
@@ -86,8 +134,25 @@ func main() {
 	}
 
 	repo := postgres.NewAvatarRepository(pool)
-	publisher := broker.NewPublisher(amqpChannel)
-	avatarService := avatar.NewService(repo, minioStorage, publisher)
+
+	// Объём хранилища считается из БД на скрейпе. Регистрируется только в
+	// сервере: воркер работает с той же базой, и дублировать ряды не нужно.
+	if err := observability.RegisterStorageUsageMetrics(repo); err != nil {
+		logger.Error("не удалось зарегистрировать метрики хранилища", "error", err)
+		os.Exit(1)
+	}
+
+	// Бизнес-логика работает с зависимостями через circuit breaker: при
+	// отказе базы, S3 или брокера запросы отклоняются сразу (503), а не
+	// висят на таймаутах. Проверки здоровья (pool, minioStorage ниже) и
+	// метрика хранилища идут в обход брейкеров — им нужно реальное
+	// состояние зависимостей.
+	breakers := resilience.NewBreakers(cfg.BreakerFailureThreshold, cfg.BreakerOpenTimeout)
+	avatarService := avatar.NewService(
+		resilience.NewRepository(repo, breakers.Postgres),
+		resilience.NewStorage(minioStorage, breakers.S3),
+		resilience.NewPublisher(broker.NewPublisher(amqpChannel), breakers.RabbitMQ),
+	)
 	webHandlers := webui.NewHandlers(avatarService)
 
 	server := api.NewAvatarServer(
@@ -100,6 +165,11 @@ func main() {
 
 	e := echo.New()
 	e.HideBanner = true
+	e.Server.ReadHeaderTimeout = readHeaderTimeout
+	e.Server.IdleTimeout = idleTimeout
+	useMiddleware(e, cfg.RateLimitRPS, cfg.RateLimitBurst)
+
+	e.GET("/metrics", echoprometheus.NewHandler())
 	e.Static("/", "web/static")
 
 	strictHandler := api.NewStrictHandler(server, nil)
@@ -120,4 +190,81 @@ func main() {
 	if err := e.Shutdown(shutdownCtx); err != nil {
 		logger.Error("ошибка при остановке сервера", "error", err)
 	}
+}
+
+// useMiddleware выстраивает цепочку middleware сервера. Echo выполняет их в
+// порядке регистрации: первый зарегистрированный — самый внешний.
+//
+// Recover стоит дважды, и это сознательно:
+//
+//   - внешний (первый) защищает всю цепочку. Без него паника в самих
+//     middleware — например, в LogValuesFunc, которая вызывается уже после
+//     обработчика, или в otelecho — не была бы перехвачена, и клиент получил
+//     бы оборванное соединение вместо 500 без единой записи в логе и метриках;
+//   - внутренний (последний) ловит панику обработчика прямо у обработчика и
+//     превращает её в обычный ответ 500. Если бы Recover был только внешним,
+//     паника пролетела бы сквозь лог доступа, метрики и otelecho, и этот 500
+//     не попал бы ни в лог, ни в метрики, ни в статус спана.
+//
+// otelecho идёт сразу за внешним Recover, чтобы спан запроса создавался
+// раньше метрик и лога доступа — они видят trace_id.
+//
+// Rate limiter стоит после метрик и лога доступа: отклонённые запросы (429)
+// видны и в avatar_requests_total{code="429"}, и в логах.
+//
+// Здесь же подключается обработчик ошибок, отвечающий 503 на разомкнутый
+// circuit breaker.
+func useMiddleware(e *echo.Echo, rateLimitRPS float64, rateLimitBurst int) {
+	e.HTTPErrorHandler = httpErrorHandler(e)
+
+	e.Use(middleware.Recover())
+	e.Use(otelecho.Middleware(serviceName))
+	e.Use(echoprometheus.NewMiddleware("avatar"))
+	e.Use(requestLogger())
+	e.Use(rateLimiter(rateLimitRPS, rateLimitBurst))
+	e.Use(middleware.ContextTimeout(requestTimeout))
+	e.Use(middleware.Recover())
+}
+
+// requestLogger пишет структурированный лог доступа через slog. Контекст
+// запроса передаётся в LogValuesFunc, поэтому в записи попадает trace_id —
+// по нему лог связывается с трейсом в Jaeger.
+func requestLogger() echo.MiddlewareFunc {
+	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogStatus:   true,
+		LogMethod:   true,
+		LogURI:      true,
+		LogLatency:  true,
+		LogError:    true,
+		LogRemoteIP: true,
+		HandleError: true,
+		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+			ctx := c.Request().Context()
+			attrs := []any{
+				"method", v.Method,
+				"uri", v.URI,
+				"status", v.Status,
+				"latency_ms", v.Latency.Milliseconds(),
+				"remote_ip", v.RemoteIP,
+			}
+			if v.Error != nil {
+				attrs = append(attrs, "error", v.Error)
+			}
+
+			// Уровень выбирается по коду ответа, а не только по v.Error:
+			// сгенерированные хендлеры заворачивают ошибку в 500-ответ и
+			// возвращают nil, поэтому по v.Error реальные сбои сервиса не
+			// отличить от успешных запросов — и поиск по level=ERROR во
+			// время инцидента не находил бы ничего.
+			switch {
+			case v.Status >= 500:
+				slog.ErrorContext(ctx, "request", attrs...)
+			case v.Status >= 400:
+				slog.WarnContext(ctx, "request", attrs...)
+			default:
+				slog.InfoContext(ctx, "request", attrs...)
+			}
+			return nil
+		},
+	})
 }
