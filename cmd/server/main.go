@@ -12,12 +12,16 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/labstack/echo-contrib/echoprometheus"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 
 	"go-avatar-service/internal/api"
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/config"
+	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
 	"go-avatar-service/internal/retryutil"
 	"go-avatar-service/internal/services/avatar"
@@ -25,18 +29,36 @@ import (
 	"go-avatar-service/internal/webui"
 )
 
-func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+// serviceName — под этим именем сервис виден в Jaeger и в логах.
+const serviceName = "avatar-server"
 
+func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("ошибка загрузки конфигурации", "error", err)
+		slog.Error("ошибка загрузки конфигурации", "error", err)
 		os.Exit(1)
 	}
+
+	logger := observability.NewLogger(os.Stdout, serviceName, cfg.LogLevel)
+	slog.SetDefault(logger)
+
+	shutdownTracing, err := observability.InitTracing(ctx, serviceName, cfg.OTLPEndpoint)
+	if err != nil {
+		logger.Error("не удалось инициализировать трейсинг", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		// Отдельный контекст: основной к этому моменту уже отменён сигналом,
+		// а экспортёру нужно время дослать накопленные спаны.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			logger.Error("ошибка остановки трейсинга", "error", err)
+		}
+	}()
 
 	var pool *pgxpool.Pool
 	err = retryutil.Do(ctx, 5, 2*time.Second, func() error {
@@ -49,6 +71,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	if err := observability.RegisterDBPoolMetrics(pool); err != nil {
+		logger.Error("не удалось зарегистрировать метрики пула БД", "error", err)
+		os.Exit(1)
+	}
 
 	if err := postgres.RunMigrations(cfg.DatabaseURL, "migrations"); err != nil {
 		logger.Error("не удалось применить миграции", "error", err)
@@ -86,6 +113,14 @@ func main() {
 	}
 
 	repo := postgres.NewAvatarRepository(pool)
+
+	// Объём хранилища считается из БД на скрейпе. Регистрируется только в
+	// сервере: воркер работает с той же базой, и дублировать ряды не нужно.
+	if err := observability.RegisterStorageUsageMetrics(repo); err != nil {
+		logger.Error("не удалось зарегистрировать метрики хранилища", "error", err)
+		os.Exit(1)
+	}
+
 	publisher := broker.NewPublisher(amqpChannel)
 	avatarService := avatar.NewService(repo, minioStorage, publisher)
 	webHandlers := webui.NewHandlers(avatarService)
@@ -100,6 +135,9 @@ func main() {
 
 	e := echo.New()
 	e.HideBanner = true
+	useMiddleware(e)
+
+	e.GET("/metrics", echoprometheus.NewHandler())
 	e.Static("/", "web/static")
 
 	strictHandler := api.NewStrictHandler(server, nil)
@@ -120,4 +158,71 @@ func main() {
 	if err := e.Shutdown(shutdownCtx); err != nil {
 		logger.Error("ошибка при остановке сервера", "error", err)
 	}
+}
+
+// useMiddleware выстраивает цепочку middleware сервера. Echo выполняет их в
+// порядке регистрации: первый зарегистрированный — самый внешний.
+//
+// Recover стоит дважды, и это сознательно:
+//
+//   - внешний (первый) защищает всю цепочку. Без него паника в самих
+//     middleware — например, в LogValuesFunc, которая вызывается уже после
+//     обработчика, или в otelecho — не была бы перехвачена, и клиент получил
+//     бы оборванное соединение вместо 500 без единой записи в логе и метриках;
+//   - внутренний (последний) ловит панику обработчика прямо у обработчика и
+//     превращает её в обычный ответ 500. Если бы Recover был только внешним,
+//     паника пролетела бы сквозь лог доступа, метрики и otelecho, и этот 500
+//     не попал бы ни в лог, ни в метрики, ни в статус спана.
+//
+// otelecho идёт сразу за внешним Recover, чтобы спан запроса создавался
+// раньше метрик и лога доступа — они видят trace_id.
+func useMiddleware(e *echo.Echo) {
+	e.Use(middleware.Recover())
+	e.Use(otelecho.Middleware(serviceName))
+	e.Use(echoprometheus.NewMiddleware("avatar"))
+	e.Use(requestLogger())
+	e.Use(middleware.Recover())
+}
+
+// requestLogger пишет структурированный лог доступа через slog. Контекст
+// запроса передаётся в LogValuesFunc, поэтому в записи попадает trace_id —
+// по нему лог связывается с трейсом в Jaeger.
+func requestLogger() echo.MiddlewareFunc {
+	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogStatus:   true,
+		LogMethod:   true,
+		LogURI:      true,
+		LogLatency:  true,
+		LogError:    true,
+		LogRemoteIP: true,
+		HandleError: true,
+		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+			ctx := c.Request().Context()
+			attrs := []any{
+				"method", v.Method,
+				"uri", v.URI,
+				"status", v.Status,
+				"latency_ms", v.Latency.Milliseconds(),
+				"remote_ip", v.RemoteIP,
+			}
+			if v.Error != nil {
+				attrs = append(attrs, "error", v.Error)
+			}
+
+			// Уровень выбирается по коду ответа, а не только по v.Error:
+			// сгенерированные хендлеры заворачивают ошибку в 500-ответ и
+			// возвращают nil, поэтому по v.Error реальные сбои сервиса не
+			// отличить от успешных запросов — и поиск по level=ERROR во
+			// время инцидента не находил бы ничего.
+			switch {
+			case v.Status >= 500:
+				slog.ErrorContext(ctx, "request", attrs...)
+			case v.Status >= 400:
+				slog.WarnContext(ctx, "request", attrs...)
+			default:
+				slog.InfoContext(ctx, "request", attrs...)
+			}
+			return nil
+		},
+	})
 }

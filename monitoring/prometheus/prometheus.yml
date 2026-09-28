@@ -1,0 +1,37 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: gophprofile
+
+scrape_configs:
+  # Приложение: HTTP-метрики Echo (RED) + бизнес-метрики avatars_* +
+  # статистика пула соединений с БД.
+  - job_name: avatar-server
+    static_configs:
+      - targets: ["server:8080"]
+        labels:
+          service: avatar-server
+
+  # У воркера нет API — метрики отдаются отдельным сервером на METRICS_PORT.
+  - job_name: avatar-worker
+    static_configs:
+      - targets: ["worker:9091"]
+        labels:
+          service: avatar-worker
+
+  # Глубина очередей и состояние брокера. Плагин rabbitmq_prometheus включён
+  # в образе management по умолчанию, порт 15692.
+  - job_name: rabbitmq
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+
+  # Метрики объектного хранилища (нужен MINIO_PROMETHEUS_AUTH_TYPE=public).
+  - job_name: minio
+    metrics_path: /minio/v2/metrics/cluster
+    static_configs:
+      - targets: ["minio:9000"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

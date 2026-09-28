@@ -5,13 +5,25 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // NewPool создаёт пул соединений с PostgreSQL по DSN.
+//
+// Пул конфигурируется через ParseConfig (а не pgxpool.New), чтобы повесить
+// на соединения OTel-трейсер: каждый SQL-запрос попадает в трейс отдельным
+// спаном.
 func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("разбор DSN: %w", err)
+	}
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

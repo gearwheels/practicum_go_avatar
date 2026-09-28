@@ -6,7 +6,15 @@ import (
 	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// tracerName — имя инструментирующей библиотеки для спанов брокера.
+const tracerName = "go-avatar-service/internal/broker"
 
 // Publisher публикует события аватарок в exchange avatars.events.
 type Publisher struct {
@@ -27,14 +35,40 @@ func (p *Publisher) PublishDeleteEvent(ctx context.Context, ev AvatarDeleteEvent
 }
 
 func (p *Publisher) publish(ctx context.Context, routingKey string, ev any) error {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "publish "+routingKey,
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			semconv.MessagingSystemRabbitmq,
+			semconv.MessagingDestinationName(ExchangeName),
+			semconv.MessagingRabbitmqDestinationRoutingKey(routingKey),
+		),
+	)
+	defer span.End()
+
 	body, err := json.Marshal(ev)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "сериализация события")
 		return fmt.Errorf("сериализация события: %w", err)
 	}
 
-	return p.ch.PublishWithContext(ctx, ExchangeName, routingKey, false, false, amqp.Publishing{
+	// Кладём traceparent в заголовки сообщения, чтобы воркер продолжил тот
+	// же трейс, а не начинал новый.
+	headers := amqp.Table{}
+	otel.GetTextMapPropagator().Inject(ctx, amqpHeaderCarrier(headers))
+
+	err = p.ch.PublishWithContext(ctx, ExchangeName, routingKey, false, false, amqp.Publishing{
 		ContentType:  "application/json",
 		DeliveryMode: amqp.Persistent,
+		Headers:      headers,
 		Body:         body,
 	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "публикация сообщения")
+		return err
+	}
+
+	span.SetAttributes(attribute.Int("messaging.message.body.size", len(body)))
+	return nil
 }

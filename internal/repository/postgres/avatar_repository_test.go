@@ -164,3 +164,30 @@ func TestAvatarRepository_UpdateThumbnails(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, thumbs, fetched.ThumbnailS3Keys)
 }
+
+// Объём считается по пользователям и не учитывает мягко удалённые аватарки —
+// на этом держится метрика avatars_storage_bytes.
+func TestAvatarRepository_StorageUsageByUser(t *testing.T) {
+	repo, pool := setupTestRepo(t)
+	ctx := context.Background()
+
+	// Уникальные пользователи: в тестовой базе могут быть чужие строки.
+	alice := "storage-alice-" + uuid.NewString()
+	bob := "storage-bob-" + uuid.NewString()
+
+	first := createTestAvatar(t, repo, pool, alice)
+	createTestAvatar(t, repo, pool, alice)
+	createTestAvatar(t, repo, pool, bob)
+
+	usage, err := repo.StorageUsageByUser(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 2*1024, usage[alice])
+	require.EqualValues(t, 1024, usage[bob])
+
+	require.NoError(t, repo.SoftDelete(ctx, first.ID))
+
+	usage, err = repo.StorageUsageByUser(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 1024, usage[alice], "удалённая аватарка не должна учитываться")
+	require.EqualValues(t, 1024, usage[bob])
+}
