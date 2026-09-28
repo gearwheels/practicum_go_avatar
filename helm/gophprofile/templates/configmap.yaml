@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-config
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+data:
+  # Несекретная конфигурация приложения. Учётные данные — в Secret.
+  SERVER_PORT: {{ .Values.server.containerPort | quote }}
+  METRICS_PORT: {{ .Values.worker.metricsPort | quote }}
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  MINIO_ENDPOINT: {{ include "gophprofile.minioEndpoint" . | quote }}
+  MINIO_BUCKET: {{ .Values.config.minioBucket | quote }}
+  MINIO_USE_SSL: {{ .Values.config.minioUseSSL | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otlpEndpoint | quote }}
+  # Миграции накатывает Job-хук (см. job-migrate.yaml), поэтому поды сервера
+  # их не запускают — иначе реплики стартовали бы наперегонки.
+  RUN_MIGRATIONS: {{ .Values.config.runMigrations | quote }}
+  RATE_LIMIT_RPS: {{ .Values.config.rateLimitRPS | quote }}
+  RATE_LIMIT_BURST: {{ .Values.config.rateLimitBurst | quote }}
+  CIRCUIT_BREAKER_FAILURE_THRESHOLD: {{ .Values.config.circuitBreakerFailureThreshold | quote }}
+  CIRCUIT_BREAKER_OPEN_TIMEOUT: {{ .Values.config.circuitBreakerOpenTimeout | quote }}

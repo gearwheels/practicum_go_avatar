@@ -1,0 +1,17 @@
+apiVersion: v2
+name: gophprofile
+description: GophProfile — микросервис управления аватарками пользователей (API, воркер и инфраструктура)
+type: application
+
+# version — версия чарта, appVersion — версия приложения (см. openapi.yaml)
+version: 0.1.0
+appVersion: "1.0.0"
+
+keywords:
+  - avatars
+  - go
+  - s3
+  - rabbitmq
+
+maintainers:
+  - name: GophProfile Team

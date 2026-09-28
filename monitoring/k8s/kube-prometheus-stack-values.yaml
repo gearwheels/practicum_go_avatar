@@ -1,0 +1,90 @@
+# Значения kube-prometheus-stack для локального кластера kind.
+#
+# Установка (см. monitoring/k8s/install.sh):
+#   helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace -f monitoring/k8s/kube-prometheus-stack-values.yaml
+#
+# Селекторы ServiceMonitor/PrometheusRule оставлены стандартными: Prometheus
+# подхватывает только ресурсы с меткой release=kube-prometheus-stack. Чарт
+# GophProfile ставит эту метку сам (serviceMonitor.labels / alerts.labels) —
+# так проверяется, что ServiceMonitor настроен корректно для стандартной
+# установки, а не «видится» только из-за ослабленного селектора.
+
+# В kind компоненты control plane слушают на 127.0.0.1 внутри узла и
+# недоступны для скрейпа — без отключения они давали бы вечные TargetDown.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 2d
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    resources:
+      requests:
+        cpu: 100m
+        memory: 400Mi
+      limits:
+        memory: 1Gi
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+
+grafana:
+  adminPassword: admin
+  # Grafana 13 при каждом старте скачивает «предустановленные» плагины
+  # (pyroscope, exploretraces и др.). На медленной сети это не успевает
+  # до liveness-пробы, и под уходит в бесконечные перезапуски. Для
+  # дашбордов проекта эти плагины не нужны.
+  env:
+    GF_PLUGINS_PREINSTALL_DISABLED: "true"
+  # Дашборды подхватываются из ConfigMap с меткой grafana_dashboard во всех
+  # namespace — чарт GophProfile кладёт туда свои дашборды.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 64Mi

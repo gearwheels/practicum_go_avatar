@@ -19,6 +19,7 @@ import (
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/resilience"
 	"go-avatar-service/internal/retryutil"
 	"go-avatar-service/internal/storage"
 	"go-avatar-service/internal/worker"
@@ -104,7 +105,7 @@ func main() {
 	// забирать — поднимаем минимальный HTTP-сервер только под /metrics.
 	metricsServer := &http.Server{
 		Addr:              ":" + cfg.MetricsPort,
-		Handler:           metricsMux(),
+		Handler:           metricsMux(amqpConn),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -115,7 +116,14 @@ func main() {
 	}()
 
 	repo := postgres.NewAvatarRepository(pool)
-	handler := worker.New(repo, minioStorage)
+	// Как и в сервере, база и S3 вызываются через circuit breaker: при их
+	// отказе обработка сообщения завершается ошибкой сразу, а сообщение уходит
+	// на повтор, вместо того чтобы держать консьюмер на таймаутах.
+	breakers := resilience.NewBreakers(cfg.BreakerFailureThreshold, cfg.BreakerOpenTimeout)
+	handler := worker.New(
+		resilience.NewRepository(repo, breakers.Postgres),
+		resilience.NewStorage(minioStorage, breakers.S3),
+	)
 	consumer := broker.NewConsumer(amqpChannel)
 
 	var wg sync.WaitGroup
@@ -148,8 +156,30 @@ func main() {
 	wg.Wait()
 }
 
-func metricsMux() *http.ServeMux {
+// metricsMux собирает служебный HTTP-обработчик воркера: метрики Prometheus
+// и пробы для Kubernetes.
+//
+// Проба здесь особенно важна: если консьюмеры завершатся (например, после
+// перезапуска RabbitMQ канал закрывается и Consume возвращает управление),
+// процесс продолжит жить, отдавая 200 на /metrics, но не будет обрабатывать
+// ни одного сообщения. Проверка состояния соединения ловит такого «зомби», и
+// kubelet перезапускает под.
+func metricsMux(amqpConn *amqp.Connection) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", observability.Handler())
+
+	health := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if amqpConn == nil || amqpConn.IsClosed() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"down","reason":"amqp connection is closed"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}
+
+	mux.HandleFunc("/healthz", health)
+	mux.HandleFunc("/livez", health)
 	return mux
 }

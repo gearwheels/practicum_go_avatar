@@ -6,18 +6,33 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"time"
 
 	"go-avatar-service/internal/domain"
 	"go-avatar-service/internal/repository"
+	"go-avatar-service/internal/resilience"
 	"go-avatar-service/internal/services/avatar"
 	"go-avatar-service/internal/webui"
 )
 
 // maxUploadSize — ограничение размера файла аватарки из ТЗ (10MB).
 const maxUploadSize = 10 << 20
+
+// Сообщения, которые видит клиент при сбоях. Текст оригинальной ошибки в
+// ответ не попадает никогда: в нём могут оказаться имя таблицы, структура
+// запроса, адрес зависимости или подстрока DSN. Для диагностики ошибка
+// нужна в логе сервера — там она и остаётся, вместе с trace_id запроса.
+const (
+	msgInternalError   = "Internal server error"
+	msgUnavailable     = "Service temporarily unavailable"
+	msgBadRequest      = "Invalid request"
+	msgMalformedUpload = "Malformed multipart request"
+	msgDependencyDown  = "dependency check failed"
+	msgBrokerDown      = "broker connection lost"
+)
 
 // allowedMimeTypes — форматы, которые сервис принимает на загрузку.
 // Реальный тип определяется по magic bytes (http.DetectContentType), а не
@@ -71,7 +86,7 @@ func (s *AvatarServer) UploadAvatar(ctx context.Context, request UploadAvatarReq
 	case errors.Is(err, errFileTooLarge):
 		return UploadAvatar413JSONResponse{Error: "File too large", MaxSize: maxUploadSize}, nil
 	case err != nil:
-		return UploadAvatar400JSONResponse{Error: "Invalid request", Details: strPtr(err.Error())}, nil
+		return UploadAvatar400JSONResponse{Error: msgBadRequest, Details: badUpload(ctx, "UploadAvatar", err)}, nil
 	case file == nil:
 		return UploadAvatar400JSONResponse{Error: "Invalid file format", Details: strPtr("file part is required")}, nil
 	case !allowedMimeTypes[file.MimeType]:
@@ -80,7 +95,10 @@ func (s *AvatarServer) UploadAvatar(ctx context.Context, request UploadAvatarReq
 
 	a, err := s.avatars.Upload(ctx, request.Params.XUserID, file.FileName, file.MimeType, int64(len(file.Data)), bytes.NewReader(file.Data))
 	if err != nil {
-		return UploadAvatar500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return UploadAvatar503JSONResponse{unavailable(ctx, "UploadAvatar", err)}, nil
+		}
+		return UploadAvatar500JSONResponse{internalError(ctx, "UploadAvatar", err)}, nil
 	}
 
 	return UploadAvatar201JSONResponse{
@@ -105,7 +123,10 @@ func (s *AvatarServer) GetAvatarById(ctx context.Context, request GetAvatarByIdR
 		return GetAvatarById404JSONResponse{NotFoundJSONResponse{Error: "Avatar not found"}}, nil
 	}
 	if err != nil {
-		return GetAvatarById500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return GetAvatarById503JSONResponse{unavailable(ctx, "GetAvatarById", err)}, nil
+		}
+		return GetAvatarById500JSONResponse{internalError(ctx, "GetAvatarById", err)}, nil
 	}
 
 	return imageResponseByContentType(result), nil
@@ -117,7 +138,10 @@ func (s *AvatarServer) GetAvatarMetadata(ctx context.Context, request GetAvatarM
 		return GetAvatarMetadata404JSONResponse{NotFoundJSONResponse{Error: "Avatar not found"}}, nil
 	}
 	if err != nil {
-		return GetAvatarMetadata500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return GetAvatarMetadata503JSONResponse{unavailable(ctx, "GetAvatarMetadata", err)}, nil
+		}
+		return GetAvatarMetadata500JSONResponse{internalError(ctx, "GetAvatarMetadata", err)}, nil
 	}
 
 	metadata := GetAvatarMetadata200JSONResponse(toAPIMetadata(a))
@@ -140,7 +164,10 @@ func (s *AvatarServer) GetUserAvatar(ctx context.Context, request GetUserAvatarR
 		}, nil
 	}
 	if err != nil {
-		return GetUserAvatar500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return GetUserAvatar503JSONResponse{unavailable(ctx, "GetUserAvatar", err)}, nil
+		}
+		return GetUserAvatar500JSONResponse{internalError(ctx, "GetUserAvatar", err)}, nil
 	}
 
 	switch result.ContentType {
@@ -164,7 +191,10 @@ func (s *AvatarServer) ListUserAvatars(ctx context.Context, request ListUserAvat
 
 	avatars, total, err := s.avatars.ListForUser(ctx, request.UserId, limit, offset)
 	if err != nil {
-		return ListUserAvatars500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return ListUserAvatars503JSONResponse{unavailable(ctx, "ListUserAvatars", err)}, nil
+		}
+		return ListUserAvatars500JSONResponse{internalError(ctx, "ListUserAvatars", err)}, nil
 	}
 
 	items := make([]AvatarMetadata, 0, len(avatars))
@@ -191,8 +221,10 @@ func (s *AvatarServer) DeleteAvatarById(ctx context.Context, request DeleteAvata
 		return DeleteAvatarById403JSONResponse{Error: "Forbidden", Details: strPtr("You can only delete your own avatars")}, nil
 	case errors.Is(err, repository.ErrNotFound):
 		return DeleteAvatarById404JSONResponse{NotFoundJSONResponse{Error: "Avatar not found"}}, nil
+	case errors.Is(err, resilience.ErrCircuitOpen):
+		return DeleteAvatarById503JSONResponse{unavailable(ctx, "DeleteAvatarById", err)}, nil
 	default:
-		return DeleteAvatarById500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
+		return DeleteAvatarById500JSONResponse{internalError(ctx, "DeleteAvatarById", err)}, nil
 	}
 }
 
@@ -205,8 +237,10 @@ func (s *AvatarServer) DeleteUserAvatar(ctx context.Context, request DeleteUserA
 		return DeleteUserAvatar403JSONResponse{Error: "Forbidden", Details: strPtr("You can only delete your own avatars")}, nil
 	case errors.Is(err, repository.ErrNotFound):
 		return DeleteUserAvatar404JSONResponse{NotFoundJSONResponse{Error: "Avatar not found"}}, nil
+	case errors.Is(err, resilience.ErrCircuitOpen):
+		return DeleteUserAvatar503JSONResponse{unavailable(ctx, "DeleteUserAvatar", err)}, nil
 	default:
-		return DeleteUserAvatar500JSONResponse{InternalErrorJSONResponse{Error: "Internal server error", Details: strPtr(err.Error())}}, nil
+		return DeleteUserAvatar500JSONResponse{internalError(ctx, "DeleteUserAvatar", err)}, nil
 	}
 }
 
@@ -216,9 +250,9 @@ func (s *AvatarServer) HealthCheck(ctx context.Context, request HealthCheckReque
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	dbStatus := pingComponent(ctx, s.dbPinger)
-	storageStatus := pingComponent(ctx, s.storagePinger)
-	brokerStatus := pingComponent(ctx, s.brokerPinger)
+	dbStatus := pingComponent(ctx, "database", s.dbPinger)
+	storageStatus := pingComponent(ctx, "s3", s.storagePinger)
+	brokerStatus := pingComponent(ctx, "broker", s.brokerPinger)
 
 	status := HealthStatus{Status: HealthStatusStatusOk}
 	status.Components.Database = dbStatus
@@ -235,6 +269,29 @@ func (s *AvatarServer) HealthCheck(ctx context.Context, request HealthCheckReque
 		return HealthCheck503JSONResponse(status), nil
 	}
 	return HealthCheck200JSONResponse(status), nil
+}
+
+// LivenessCheck отвечает на /livez — пробу жизнеспособности для Kubernetes.
+//
+// В отличие от HealthCheck здесь намеренно НЕТ обращений к БД, S3 и брокеру
+// по сети: /health отдаёт 503 при недоступности любой зависимости, и если бы
+// его использовали в livenessProbe, kubelet перезапускал бы разом все реплики
+// во время кратковременной недоступности Postgres — то есть добивал бы
+// систему, которой и так плохо.
+//
+// Проверяется только невосстановимое состояние процесса: соединение с
+// брокером устанавливается один раз при старте и не переподключается,
+// поэтому закрытое соединение означает, что под уже не сможет публиковать
+// события и его нужно перезапустить. brokerPinger.Ping для AMQP — это
+// проверка флага IsClosed(), без сетевого вызова.
+func (s *AvatarServer) LivenessCheck(ctx context.Context, request LivenessCheckRequestObject) (LivenessCheckResponseObject, error) {
+	if s.brokerPinger != nil {
+		if err := s.brokerPinger.Ping(ctx); err != nil {
+			slog.ErrorContext(ctx, "проба жизнеспособности не прошла", "component", "broker", "error", err)
+			return LivenessCheck503JSONResponse{Status: LivenessStatusStatusDown, Reason: strPtr(msgBrokerDown)}, nil
+		}
+	}
+	return LivenessCheck200JSONResponse{Status: LivenessStatusStatusOk}, nil
 }
 
 // ---------- Веб-интерфейс ----------
@@ -263,7 +320,7 @@ func (s *AvatarServer) PostUploadForm(ctx context.Context, request PostUploadFor
 	file, userID, err := parseMultipartUpload(request.Body)
 	switch {
 	case err != nil:
-		return PostUploadForm400JSONResponse{BadRequestJSONResponse{Error: "Invalid request", Details: strPtr(err.Error())}}, nil
+		return PostUploadForm400JSONResponse{BadRequestJSONResponse{Error: msgBadRequest, Details: badUpload(ctx, "PostUploadForm", err)}}, nil
 	case file == nil:
 		return PostUploadForm400JSONResponse{BadRequestJSONResponse{Error: "Invalid file format", Details: strPtr("file part is required")}}, nil
 	case userID == "":
@@ -274,7 +331,10 @@ func (s *AvatarServer) PostUploadForm(ctx context.Context, request PostUploadFor
 
 	html, err := s.web.HandleUploadForm(ctx, userID, file.FileName, file.MimeType, int64(len(file.Data)), bytes.NewReader(file.Data))
 	if err != nil {
-		return PostUploadForm400JSONResponse{BadRequestJSONResponse{Error: "Upload failed", Details: strPtr(err.Error())}}, nil
+		// Сбой при сохранении — не ошибка клиента, поэтому не 400: ошибка
+		// уходит в общий обработчик Echo, который вернёт 500, а при
+		// разомкнутом circuit breaker — 503.
+		return nil, err
 	}
 
 	return PostUploadForm200TexthtmlResponse{Body: bytes.NewReader(html), ContentLength: int64(len(html))}, nil
@@ -284,7 +344,37 @@ func (s *AvatarServer) PostUploadForm(ctx context.Context, request PostUploadFor
 
 func strPtr(s string) *string { return &s }
 
-func pingComponent(ctx context.Context, checker Pinger) *ComponentStatus {
+// internalError формирует тело ответа 500: клиенту — только факт сбоя,
+// настоящая причина — в лог. Логируется контекстным методом, чтобы в записи
+// оказался trace_id и её можно было связать с трейсом (см.
+// observability.NewLogger).
+func internalError(ctx context.Context, op string, err error) InternalErrorJSONResponse {
+	slog.ErrorContext(ctx, "внутренняя ошибка", "op", op, "error", err)
+	return InternalErrorJSONResponse{Error: msgInternalError}
+}
+
+// unavailable формирует тело ответа 503 для разомкнутого circuit breaker.
+// Деталей в ответе нет: из текста ошибки брейкера («postgres: circuit
+// breaker is open») клиент узнал бы имя отказавшей зависимости и то, как
+// она защищена. Уровень warn, а не error: это ожидаемое временное
+// состояние, на которое сервис отвечает штатно.
+func unavailable(ctx context.Context, op string, err error) ServiceUnavailableJSONResponse {
+	slog.WarnContext(ctx, "зависимость недоступна", "op", op, "error", err)
+	return ServiceUnavailableJSONResponse{Error: msgUnavailable}
+}
+
+// badUpload формирует тело ответа 400 при неразобранном multipart-запросе.
+// Ошибка парсера описывает внутренности обработки запроса, поэтому клиенту
+// уходит постоянный текст.
+func badUpload(ctx context.Context, op string, err error) *string {
+	slog.WarnContext(ctx, "не удалось разобрать multipart-запрос", "op", op, "error", err)
+	return strPtr(msgMalformedUpload)
+}
+
+// pingComponent проверяет зависимость для /health. Имя нужно логу: в ответе
+// причины отказа нет, и без имени в логе было бы не понять, что именно
+// отвалилось.
+func pingComponent(ctx context.Context, name string, checker Pinger) *ComponentStatus {
 	if checker == nil {
 		return nil
 	}
@@ -294,8 +384,10 @@ func pingComponent(ctx context.Context, checker Pinger) *ComponentStatus {
 	latencyMs := int(time.Since(start) / time.Millisecond)
 
 	if err != nil {
-		errMsg := err.Error()
-		return &ComponentStatus{Status: ComponentStatusStatusError, LatencyMs: &latencyMs, Error: &errMsg}
+		// /health доступен снаружи через Ingress, поэтому текст ошибки
+		// драйвера (адрес и порт зависимости, имя бакета) в ответ не идёт.
+		slog.WarnContext(ctx, "проверка зависимости не прошла", "component", name, "error", err)
+		return &ComponentStatus{Status: ComponentStatusStatusError, LatencyMs: &latencyMs, Error: strPtr(msgDependencyDown)}
 	}
 	return &ComponentStatus{Status: ComponentStatusStatusOk, LatencyMs: &latencyMs}
 }

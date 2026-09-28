@@ -1,0 +1,36 @@
+# СГЕНЕРИРОВАНО автоматически из helm/gophprofile — не редактируйте вручную.
+# Обновить: ./scripts/render-k8s.sh
+#
+# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения
+# используйте Helm напрямую с нужным values-файлом.
+---
+# Source: gophprofile/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gophprofile
+  labels:
+    helm.sh/chart: gophprofile-0.1.0
+    app.kubernetes.io/name: gophprofile
+    app.kubernetes.io/instance: gophprofile
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gophprofile
+  annotations:
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "avatars.local"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gophprofile-server
+                port:
+                  number: 80

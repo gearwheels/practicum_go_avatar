@@ -1,0 +1,120 @@
+# СГЕНЕРИРОВАНО автоматически из helm/gophprofile — не редактируйте вручную.
+# Обновить: ./scripts/render-k8s.sh
+#
+# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения
+# используйте Helm напрямую с нужным values-файлом.
+---
+# Source: gophprofile/templates/deployment-worker.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gophprofile-worker
+  labels:
+    helm.sh/chart: gophprofile-0.1.0
+    app.kubernetes.io/name: gophprofile
+    app.kubernetes.io/instance: gophprofile
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gophprofile
+    app.kubernetes.io/component: worker
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gophprofile
+      app.kubernetes.io/instance: gophprofile
+      app.kubernetes.io/component: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: gophprofile-0.1.0
+        app.kubernetes.io/name: gophprofile
+        app.kubernetes.io/instance: gophprofile
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: gophprofile
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/config: dc000e6cf30743d66c7cb55a05825f081dc661f343ffa9b35bca2b8150b29943
+        checksum/secret: 319b729cf9a3100ce89c0a379b4dad2270bd2efc222cb7738752ebf40b9de4ca
+    spec:
+      serviceAccountName: gophprofile
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Больше, чем у сервера: воркер может держать в работе сообщение
+      # (скачивание оригинала + генерация миниатюр).
+      terminationGracePeriodSeconds: 60
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: gophprofile
+              app.kubernetes.io/instance: gophprofile
+              app.kubernetes.io/component: worker
+      containers:
+        - name: worker
+          image: "gophprofile:local"
+          imagePullPolicy: IfNotPresent
+          command: ["./worker"]
+          ports:
+            # У воркера нет API — порт нужен только для метрик и проб.
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: gophprofile-config
+            - secretRef:
+                name: gophprofile-secrets
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          # Пробы проверяют состояние AMQP-соединения: без этого «зомби»-воркер
+          # с завершившимися консьюмерами продолжал бы отдавать 200 на /metrics,
+          # не обрабатывая ни одного сообщения.
+          readinessProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

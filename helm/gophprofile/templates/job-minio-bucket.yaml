@@ -1,0 +1,60 @@
+{{- if .Values.infra.minio.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-minio-bucket
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio-init
+  annotations:
+    # Аналог контейнера minio-init из docker-compose. Бакет обязателен:
+    # проверка здоровья приложения делает BucketExists, и без бакета
+    # /health отдавал бы 503 бесконечно.
+    # Вес 1 — после джобы миграций.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile.labels" . | nindent 8 }}
+        app.kubernetes.io/component: minio-init
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: mc
+          image: {{ .Values.infra.minio.mcImage }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              until mc alias set local http://{{ include "gophprofile.minioServiceName" . }}:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                echo "ждём MinIO..."
+                sleep 3
+              done
+              mc mb --ignore-existing local/{{ .Values.config.minioBucket }}
+              mc anonymous set download local/{{ .Values.config.minioBucket }}
+              echo "бакет {{ .Values.config.minioBucket }} готов"
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gophprofile.secretName" . }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gophprofile.secretName" . }}
+                  key: MINIO_ROOT_PASSWORD
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+              cpu: 250m
+{{- end }}

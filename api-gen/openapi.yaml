@@ -13,8 +13,8 @@ info:
 servers:
   - url: http://localhost:8080
     description: Локальное окружение разработки
-  - url: https://api.gophprofile.example.com
-    description: Production
+  - url: https://avatars.example.com
+    description: Production (Ingress в Kubernetes, см. helm/gophprofile/values-prod.yaml)
 
 tags:
   - name: Avatars
@@ -85,6 +85,10 @@ paths:
               example:
                 error: "File too large"
                 max_size: 10485760
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -137,6 +141,10 @@ paths:
                 format: binary
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -166,6 +174,10 @@ paths:
                 details: "You can only delete your own avatars"
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -185,6 +197,10 @@ paths:
                 $ref: '#/components/schemas/AvatarMetadata'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -237,6 +253,10 @@ paths:
                 format: binary
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -260,6 +280,10 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -308,6 +332,10 @@ paths:
                     example: 0
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -337,11 +365,59 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthStatus'
               example:
-                status: "degraded"
+                status: "down"
                 components:
                   database: { status: "ok", latency_ms: 4 }
                   s3: { status: "error", error: "connection timeout" }
                   broker: { status: "ok", latency_ms: 6 }
+
+  /livez:
+    get:
+      tags: [Health]
+      summary: Проба жизнеспособности (liveness)
+      description: >
+        В отличие от /health не обращается к внешним зависимостям. Отдаёт 503
+        только при состоянии, из которого процесс не может восстановиться сам
+        (закрытое соединение с брокером). Используется в livenessProbe
+        Kubernetes: проверка зависимостей в liveness приводила бы к
+        одновременному перезапуску всех реплик при кратковременной
+        недоступности БД.
+      operationId: livenessCheck
+      responses:
+        '200':
+          description: Процесс работоспособен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessStatus'
+              example:
+                status: "ok"
+        '503':
+          description: Процесс в невосстановимом состоянии, требуется перезапуск
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessStatus'
+              example:
+                status: "down"
+                reason: "amqp connection is closed"
+
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Метрики Prometheus
+      description: >
+        Метрики в формате Prometheus text exposition: HTTP-метрики (RED),
+        бизнес-метрики (avatars_*) и статистика пула соединений с БД.
+        Обслуживается middleware, а не сгенерированным обработчиком.
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Метрики в текстовом формате Prometheus
+          content:
+            text/plain:
+              schema:
+                type: string
 
   /web/upload:
     get:
@@ -450,6 +526,35 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: >
+        Превышен лимит частоты запросов. Ограничение действует на уровне
+        ingress-контроллера и в каждом экземпляре сервиса (по X-User-ID, а без
+        него — по IP клиента).
+      headers:
+        Retry-After:
+          description: Через сколько секунд можно повторить запрос
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Too many requests"
+            details: "Rate limit exceeded, retry later"
+    ServiceUnavailable:
+      description: >
+        Внешняя зависимость (PostgreSQL, S3 или брокер) временно недоступна:
+        circuit breaker разомкнут, и запрос отклонён сразу, без ожидания
+        таймаута. Повторите запрос позже.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Service temporarily unavailable"
+            details: "storage: circuit breaker is open"
     InternalError:
       description: Внутренняя ошибка сервиса
       content:
@@ -563,6 +668,16 @@ components:
             broker:
               $ref: '#/components/schemas/ComponentStatus'
       required: [status, components]
+
+    LivenessStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, down]
+        reason:
+          type: string
+      required: [status]
 
     Error:
       type: object

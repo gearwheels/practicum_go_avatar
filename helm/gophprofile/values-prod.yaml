@@ -1,0 +1,120 @@
+# Продакшен-окружение.
+#
+# Ключевое отличие от локального стенда: БД, брокер и хранилище — внешние
+# managed-сервисы, а не поды в кластере. Учётные данные берутся из
+# существующего Secret, созданного вне чарта (внешним менеджером секретов).
+#
+# helm install gophprofile helm/gophprofile -f helm/gophprofile/values-prod.yaml \
+#   --set image.tag=1.0.0 --set ingress.host=avatars.example.com
+
+image:
+  repository: registry.example.com/gophprofile
+  # Тег задаётся явно при выкате: latest в проде не используется.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: registry-credentials
+
+server:
+  replicaCount: 3
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: "1"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+worker:
+  replicaCount: 3
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: "1"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+
+config:
+  logLevel: info
+  minioBucket: avatars
+  minioUseSSL: "true"
+  otlpEndpoint: otel-collector.observability.svc.cluster.local:4317
+  runMigrations: "false"
+  rateLimitRPS: "50"
+  rateLimitBurst: "100"
+  circuitBreakerFailureThreshold: "5"
+  circuitBreakerOpenTimeout: 30s
+
+# Все чувствительные значения приходят из внешнего Secret; в values их нет.
+# Secret должен содержать ключи: DATABASE_URL, RABBITMQ_URL,
+# MINIO_ROOT_USER, MINIO_ROOT_PASSWORD.
+secrets:
+  existingSecret: gophprofile-credentials
+
+ingress:
+  enabled: true
+  className: nginx
+  host: avatars.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+  tls:
+    - hosts:
+        - avatars.example.com
+      secretName: gophprofile-tls
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  # Брокер внешний — его метрики собирает провайдер.
+  rabbitmq: false
+
+alerts:
+  enabled: true
+
+networkPolicy:
+  enabled: true
+  # Инфраструктура вне кластера: разрешаем выход к managed-сервисам и к
+  # OTLP-коллектору. Диапазон адресов — пример, подставьте свой.
+  extraEgress:
+    - to:
+        - ipBlock:
+            cidr: 10.20.0.0/16
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 5671
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 4317
+
+# Инфраструктура — внешняя: managed Postgres, брокер и объектное хранилище.
+infra:
+  postgres:
+    enabled: false
+  rabbitmq:
+    enabled: false
+  minio:
+    enabled: false

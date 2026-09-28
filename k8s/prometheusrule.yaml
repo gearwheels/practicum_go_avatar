@@ -1,0 +1,138 @@
+# СГЕНЕРИРОВАНО автоматически из helm/gophprofile — не редактируйте вручную.
+# Обновить: ./scripts/render-k8s.sh
+#
+# Значения взяты из helm/gophprofile/values.yaml. Для другого окружения
+# используйте Helm напрямую с нужным values-файлом.
+---
+# Source: gophprofile/templates/prometheusrule.yaml
+# Правила алертов. Prometheus Operator подхватывает PrometheusRule по метке
+# release (alerts.labels), сработавшие алерты уходят в Alertmanager.
+# Описание каждого алерта и действий при нём — в README («Алерты»).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gophprofile-alerts
+  labels:
+    helm.sh/chart: gophprofile-0.1.0
+    app.kubernetes.io/name: gophprofile
+    app.kubernetes.io/instance: gophprofile
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: gophprofile
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: gophprofile.availability
+      rules:
+        - alert: GophProfileTargetDown
+          expr: up{namespace="gophprofile", job=~"gophprofile-server|gophprofile-worker"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            service: gophprofile
+          annotations:
+            summary: "Prometheus не может снять метрики с {{ $labels.pod }}"
+            description: "Таргет {{ $labels.job }} ({{ $labels.pod }}) недоступен дольше 2 минут: процесс упал или завис."
+
+        - alert: GophProfilePodNotReady
+          expr: sum by (pod) (kube_pod_status_ready{namespace="gophprofile", condition="false"}) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: gophprofile
+          annotations:
+            summary: "Под {{ $labels.pod }} не готов"
+            description: "Readiness-проба не проходит 5 минут — под выведен из балансировки. Для сервера это значит, что недоступна БД, S3 или брокер (см. /health)."
+
+        - alert: GophProfilePodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total{namespace="gophprofile"}[15m]) > 3
+          labels:
+            severity: critical
+            service: gophprofile
+          annotations:
+            summary: "Под {{ $labels.pod }} перезапускается"
+            description: "Контейнер {{ $labels.container }} перезапустился {{ $value | humanize }} раз за 15 минут (CrashLoop, OOMKill или падение liveness)."
+
+        - alert: GophProfileHPAAtMaxReplicas
+          expr: |
+            max by (horizontalpodautoscaler) (kube_horizontalpodautoscaler_status_current_replicas{namespace="gophprofile"})
+              >= max by (horizontalpodautoscaler) (kube_horizontalpodautoscaler_spec_max_replicas{namespace="gophprofile"})
+          for: 15m
+          labels:
+            severity: warning
+            service: gophprofile
+          annotations:
+            summary: "HPA {{ $labels.horizontalpodautoscaler }} упёрся в максимум реплик"
+            description: "15 минут работает максимальное число реплик — запаса для роста нагрузки нет. Проверьте maxReplicas и ёмкость узлов."
+
+    - name: gophprofile.http
+      rules:
+        - alert: GophProfileHighErrorRate
+          expr: |
+            100 * sum(rate(avatar_requests_total{namespace="gophprofile", code=~"5..", url!="/metrics"}[5m]))
+              / clamp_min(sum(rate(avatar_requests_total{namespace="gophprofile", url!="/metrics"}[5m])), 0.001)
+              > 5
+          for: 5m
+          labels:
+            severity: critical
+            service: gophprofile
+          annotations:
+            summary: "Доля ответов 5xx выше 5%"
+            description: "Сейчас {{ $value | humanize }}% запросов завершаются ошибкой сервера."
+
+        - alert: GophProfileHighLatencyP95
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(avatar_request_duration_seconds_bucket{namespace="gophprofile", url!="/metrics"}[5m])))
+              > 1
+          for: 10m
+          labels:
+            severity: warning
+            service: gophprofile
+          annotations:
+            summary: "p95 времени ответа выше 1с"
+            description: "95-й перцентиль длительности запросов — {{ $value | humanizeDuration }}."
+
+        - alert: GophProfileRateLimitRejections
+          expr: sum(rate(avatar_requests_total{namespace="gophprofile", code="429"}[5m])) > 1
+          for: 10m
+          labels:
+            severity: info
+            service: gophprofile
+          annotations:
+            summary: "Сервис массово отвечает 429"
+            description: "{{ $value | humanize }} отказов в секунду по rate limit: это либо злоупотребление, либо лимит занижен для реальной нагрузки."
+
+    - name: gophprofile.dependencies
+      rules:
+        - alert: GophProfileCircuitBreakerOpen
+          # max_over_time: при отказе брейкер то и дело переходит в half-open на
+          # пробный запрос и снова размыкается; без сглаживания эти моменты
+          # сбрасывали бы счётчик for.
+          expr: max by (name) (max_over_time(circuit_breaker_state{namespace="gophprofile"}[2m])) == 2
+          for: 1m
+          labels:
+            severity: critical
+            service: gophprofile
+          annotations:
+            summary: "Circuit breaker {{ $labels.name }} разомкнут"
+            description: "Зависимость {{ $labels.name }} отказывает: обращения к ней отклоняются, клиенты получают 503."
+
+        - alert: GophProfileStorageStatsDown
+          expr: max(avatars_storage_stats_up{namespace="gophprofile"}) == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: gophprofile
+          annotations:
+            summary: "Не удаётся посчитать занятое хранилище"
+            description: "Сбор avatars_storage_bytes из БД завершается ошибкой — вероятна проблема с Postgres."
+
+        - alert: GophProfileQueueBacklog
+          expr: sum by (queue) (rabbitmq_queue_messages_ready{namespace="gophprofile"}) > 100
+          for: 10m
+          labels:
+            severity: warning
+            service: gophprofile
+          annotations:
+            summary: "Очередь {{ $labels.queue }} растёт"
+            description: "{{ $value }} сообщений ждут обработки дольше 10 минут: воркеры не справляются или остановлены."

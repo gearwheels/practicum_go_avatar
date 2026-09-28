@@ -1,0 +1,96 @@
+{{- if .Values.infra.minio.enabled }}
+# MinIO — S3-совместимое хранилище для локального стенда.
+# В продакшене выключается, а приложение направляется на настоящий S3.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile.minioServiceName" . }}
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "gophprofile.selectorLabels" (dict "ctx" . "component" "minio") | nindent 4 }}
+  ports:
+    - name: api
+      port: 9000
+      targetPort: api
+    - name: console
+      port: 9001
+      targetPort: console
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-minio
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  serviceName: {{ include "gophprofile.minioServiceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" (dict "ctx" . "component" "minio") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile.labels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: minio
+          image: {{ .Values.infra.minio.image }}
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gophprofile.secretName" . }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gophprofile.secretName" . }}
+                  key: MINIO_ROOT_PASSWORD
+            # Открывает /minio/v2/metrics/cluster без токена для Prometheus.
+            - name: MINIO_PROMETHEUS_AUTH_TYPE
+              value: public
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.infra.minio.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.infra.minio.storageClass }}
+        storageClassName: {{ .Values.infra.minio.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.infra.minio.storage }}
+{{- end }}

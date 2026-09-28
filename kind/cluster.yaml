@@ -1,0 +1,31 @@
+# Конфигурация локального кластера kind для разработки и проверки чарта.
+#
+# Создание:
+#   kind create cluster --name gophprofile --config kind/cluster.yaml
+#
+# Узел помечен как ingress-ready и пробрасывает порты 80/443 на хост, чтобы
+# ingress-nginx был доступен напрямую по http://localhost без port-forward.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: gophprofile
+
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP
+
+  # Два воркер-узла: чтобы HPA и podAntiAffinity разносили реплики реально,
+  # а не формально на одном узле.
+  - role: worker
+  - role: worker

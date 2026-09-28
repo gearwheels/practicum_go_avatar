@@ -94,6 +94,32 @@ var (
 	)
 )
 
+// Метрики устойчивости: состояние circuit breaker'ов внешних зависимостей.
+var (
+	circuitBreakerState = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "circuit_breaker_state",
+			Help: "Circuit breaker state per dependency: 0 - closed, 1 - half-open, 2 - open",
+		},
+		[]string{"name"},
+	)
+
+	CircuitBreakerRejectedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "circuit_breaker_rejected_total",
+			Help: "Calls rejected without reaching the dependency because the circuit breaker was open",
+		},
+		[]string{"name"},
+	)
+)
+
+// SetCircuitBreakerState публикует состояние брейкера: 0 closed,
+// 1 half-open, 2 open (см. internal/resilience). Эти значения подписаны на
+// панели дашборда, поэтому менять их нельзя.
+func SetCircuitBreakerState(name string, state int) {
+	circuitBreakerState.WithLabelValues(name).Set(float64(state))
+}
+
 // ObserveUpload разом фиксирует счётчик и длительность загрузки — чтобы на
 // стороне вызова не разъезжались лейблы status.
 func ObserveUpload(start time.Time, err error) {
